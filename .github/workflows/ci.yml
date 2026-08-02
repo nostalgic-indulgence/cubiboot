@@ -90,38 +90,47 @@ jobs:
           cp cubeboot/cubeboot.dol dist/ipl.dol
           cp apploader.img         dist/swiss/patches/apploader.img
           cp cubiboot.iso          dist/cubiboot.iso
-          # Vanilla config.ini (only keys stock cubiboot parses).
+          # Default config.ini. cube_logo names a PNG the USER supplies on their
+          # own SD card -- it is deliberately not shipped and the build must not
+          # depend on it. cubiboot falls back to the stock wordmark when the file
+          # is absent, so referencing it here is safe.
           cat > dist/config.ini <<'INI'
           [cubeboot]
+          # Custom cube logo color - Supports RGB hex colors aka websafe colors
+          # Keep the line commented out to use original logo color
+          # Setting "random" shows a random color
+          cube_color = random
+          #660089
 
-          ; Boot a specific program by default, relative to the SD card root.
-          ; default_program = /swiss.dol
+          # Enable booting through Swiss for all games
+          force_swiss_default = 0
 
-          ; Delay (ms) before the boot animation begins (e.g. to let your TV sync).
-          ; preboot_delay_ms = 500
+          # Force progressive scan inside the IPL menu
+          force_progressive = 0
 
-          ; Delay (ms) after the animation finishes.
-          ; postboot_delay_ms = 0
+          # Disable MemCard PRO GC Support
+          disable_mcp_select = 0
+
+          # Used for waiting for GCVideo to initialize
+          preboot_delay_ms = 0
+
+          # Delays loading after the boot logo
+          # to mimic the load times you would usually experience when booting a disc
+          # postboot_delay_ms = 3000
+
+          # Experimental configuration options below
+          #
+          # This enables folder icons and game icons which are still a little buggy
+          # enable_experimental_png = 0
+          #
+          # This enables the cube logo feature which replaces the word 'GAMECUBE' on the boot animation
+          cube_logo = logo.png
           INI
-          # Guard: config.ini must not reference an asset the zip does not ship.
-          # A cube_logo pointing at a file that never lands on the SD card fails
-          # silently at boot (you just get the stock wordmark), which is painful
-          # to diagnose on a console. Fail the build instead.
-          EXTRA=""
-          LOGO=$(sed -n 's/^[[:space:]]*cube_logo[[:space:]]*=[[:space:]]*\/\?\(.*[^[:space:]]\)[[:space:]]*$/\1/p' dist/config.ini | tail -1)
-          if [ -n "$LOGO" ]; then
-            if [ ! -f "dist/$LOGO" ]; then
-              echo "ERROR: dist/config.ini sets cube_logo=$LOGO but dist/$LOGO does not exist," >&2
-              echo "       so it would not be packaged and the logo would silently not load." >&2
-              exit 1
-            fi
-            EXTRA="$LOGO"
-          fi
           # EXTRACT_TO_ROOT.zip: copy straight to the SD card root. Remove any
           # stale archive first -- `zip` ADDS to an existing file rather than
           # replacing it, so a leftover zip would ship files from an older build.
           rm -f EXTRACT_TO_ROOT.zip dist/EXTRACT_TO_ROOT.zip
-          (cd dist && zip -r ../EXTRACT_TO_ROOT.zip ipl.dol config.ini swiss $EXTRA)
+          (cd dist && zip -r ../EXTRACT_TO_ROOT.zip ipl.dol config.ini swiss)
           cp EXTRACT_TO_ROOT.zip dist/EXTRACT_TO_ROOT.zip
           unzip -l EXTRACT_TO_ROOT.zip
 
