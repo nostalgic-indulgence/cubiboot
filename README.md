@@ -30,14 +30,11 @@ a memory card slot; that still works and takes priority if present.
 
 ### IDE-EXI
 IDE-EXI (ATA-over-EXI) adapters are supported in both memory card slots and in
-SP1, with the same EXI mapping Swiss uses. Drives are read at 32 MHz; if a
-particular adapter or cable produces read errors, drop `ATA_EXI_FREQ` in
-`cubeboot/source/emu/ata.c` from 5 (32 MHz) to 4 (16 MHz) and rebuild.
+SP1, with the same EXI mapping Swiss uses.
 
 > [!NOTE]
 > The IDE-EXI and GC Loader read paths have been validated on hardware, but not
-> in every adapter/drive combination. Dolphin cannot emulate either one, so they
-> only exercise on a real console.
+> in every adapter/drive combination.
 
 ## Installation - [PicoLoader](https://github.com/makeo/PicoLoader)
 1. Download the [```cubiboot_picoloader.uf2```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot_picoloader.uf2) file
@@ -58,12 +55,12 @@ particular adapter or cable produces read errors, drop `ATA_EXI_FREQ` in
 2. Extract the contents to the root of the SD card
 3. Pressing Z + A + START whilst in a game brings you back to the cubiboot menu
 
-## Other ODEs (e.g. GC Loader)
+## Other ODEs (e.g. GC Loader/CubeODE)
 Download the [```cubiboot.iso```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot.iso) and use it as appropriate for your ODE.\
 On a GC Loader, your programs and `config.ini` can go on the GC Loader's own SD
 card — a separate SD2SP2, SD Gecko or similar adapter is no longer required, but
 still works and takes priority if one is attached.\
-ODEs besides PicoLoader and GC Loader are not supported, and issues specific to
+ODEs besides CubeODE and GC Loader are not supported, and issues specific to
 these devices might not be fixed.
 
 ## Release files — which one do I need?
@@ -78,15 +75,15 @@ together.
 | `cubiboot_picoloader.uf2` | [PicoLoader](https://github.com/makeo/PicoLoader) | PicoLoader firmware with `cubiboot.iso` embedded. Flash to the Pico; it serves the image to the disc interface. |
 | `cubiboot_picoboot_pico.uf2` | [PicoBoot](https://github.com/webhdx/PicoBoot) on a **Pico / RP2040** | Complete image: PicoBoot firmware + cubiboot as its payload. Use for a fresh install. |
 | `cubiboot_picoboot_pico2.uf2` | PicoBoot on a **Pico 2 / RP2350** | Same, for the RP2350 board. |
-| `cubiboot_picoboot_payload.uf2` | A Pico **already running** PicoBoot | Payload only — swaps in cubiboot without touching the firmware. Works on both board families. |
+| `cubiboot_picoboot_payload.uf2` | A Pico **already running** PicoBoot | Payload only — swaps in cubiboot without touching the firmware. Works on both board families **Pico/Pico 2**. |
 | `cubiboot.iso` | GC Loader and other ODEs | Bootable GameCube disc image. |
-| `ipl.dol` | gekkoboot, or PicoBoot/PicoLoader chainloading a payload from SD | The loader itself, already named for you — copy it to the SD card root as-is. |
+| `ipl.dol` | gekkoboot, or PicoBoot/PicoLoader chainloading a payload from SD | The cubiboot loader itself, already renamed for you — copy it to the SD card root as-is. |
 
 **Supporting files, used alongside the above:**
 
 | File | What it is |
 |------|------------|
-| `config.ini` | Settings (default program, boot delays). Goes on the SD card root. See [docs/settings.md](docs/settings.md). |
+| `config.ini` | Settings (custom boot logo/colors, boot delays). Goes on the SD card root. See [docs/settings.md](docs/settings.md). |
 | `apploader.img` | Enables In-Game Reset — Z + A + START returns you to the cubiboot menu. Goes in `swiss/patches/` on the SD card. |
 | `EXTRACT_TO_ROOT.zip` | Convenience bundle of `ipl.dol`, `config.ini` and `swiss/patches/apploader.img`. Extract to the SD card root to place all three at once. |
 
