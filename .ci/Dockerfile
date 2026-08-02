@@ -41,10 +41,17 @@ RUN git clone https://github.com/extremscorner/libfat.git /opt/src/libfat \
 # cubeboot-tools: source for the DISC apploader and mkgbi, which .ci/build_disc_
 # apploader.sh builds into the gbi.hdr baked into cubiboot.iso.
 #
-# This is the cubiboot FORK of makeo/cubeboot-tools. It carries the apploader
-# changes (-O1, PATCH_IPL 3, IGNORE_BOOT_MODE 1, stdbool, the two statics moved to
-# .data) as reviewable commits; they used to be sed rewrites applied at build time.
-# See README-CUBIBOOT.md in that repo for the full diff and rationale.
+# Repo: silverstee1/cubeboot-tools, branch `cubiboot`. That branch is
+# makeo/cubeboot-tools@a68d82e plus one commit carrying the apploader changes
+# (-O1, PATCH_IPL 3, IGNORE_BOOT_MODE 1, stdbool, the two statics moved to .data)
+# as a reviewable diff; they used to be sed rewrites applied at build time.
+# See README-CUBIBOOT.md on that branch for the full rationale.
+#
+# NOTE: that repo's own `master` is a fork of extremscorner/cubeboot-tools, an
+# unrelated lineage whose apploader.c is a different rewrite -- PATCH_IPL 2, no
+# hide_ipl_animation(), neither of the statics. The changes here cannot live on
+# top of it, and PATCH_IPL 2 is precisely the "stock animation plays, then
+# cubiboot's" behaviour this fixes. Hence the separate branch off makeo's tree.
 #
 # Pinned to a commit on purpose. Tracking a branch would NOT pick changes up
 # anyway -- the image is cached in GHCR keyed on the hash of this Dockerfile, so
