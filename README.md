@@ -83,7 +83,7 @@ together.
 
 | File | What it is |
 |------|------------|
-| `config.ini` | Settings (custom boot logo/colors, boot delays). Goes on the SD card root. See [docs/settings.md](docs/settings.md). |
+| `config.ini` | Settings (custom boot logo/colors, boot delays). Goes on the SD card root. See [docs/settings.md](docs/settings.md) and [Custom boot logo](#custom-boot-logo). |
 | `apploader.img` | Enables In-Game Reset — Z + A + START returns you to the cubiboot menu. Goes in `swiss/patches/` on the SD card. |
 | `EXTRACT_TO_ROOT.zip` | Convenience bundle of `ipl.dol`, `config.ini` and `swiss/patches/apploader.img`. Extract to the SD card root to place all three at once. |
 
@@ -91,6 +91,26 @@ together.
 > PicoBoot and PicoLoader are different products and are not interchangeable.
 > PicoLoader serves `cubiboot.iso` to the disc drive interface; PicoBoot replaces
 > the console's IPL and injects a `.dol` over EXI.
+
+## Custom boot logo
+`cube_logo` replaces the "GAMECUBE" wordmark in the boot animation with your own
+image. Make one with the **[Boot Logo Generator](https://silverstee1.github.io/cubiboot-logo-generator/)**
+([source](https://github.com/silverstee1/cubiboot-logo-generator)) — it runs
+entirely in your browser, nothing is uploaded, and it always outputs the only
+format the decoder accepts: a **32-bit RGBA PNG, exactly 352×40**.
+
+Drop the result on your SD card root as `logo.png`; the shipped `config.ini`
+already points at it:
+```ini
+cube_logo = logo.png
+```
+The PNG is **not** included in the release files — it is yours to supply, and
+cubiboot falls back to the stock wordmark when it is missing.
+
+> [!TIP]
+> `cube_color` tints the light pixels of the logo. If you set a colour, use
+> light-on-black art (the generator's Text tab and its greyscale image option
+> both produce this) so the tint applies cleanly.
 
 ## Building
 Pushes to `main` are built automatically by GitHub Actions, which produces every
