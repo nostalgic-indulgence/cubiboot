@@ -38,7 +38,23 @@ RUN git clone https://github.com/extremscorner/libfat.git /opt/src/libfat \
     && (cp -fr libfat_license.txt "$DEVKITPRO/libogc2" || true) \
     && cp -fr libogc2/gamecube "$DEVKITPRO/libogc2"
 
-# cubeboot-tools (makeo): provides gbi.hdr (kept for parity; not required for .dol/apploader).
-RUN git clone --depth 1 https://github.com/makeo/cubeboot-tools /opt/src/cubeboot-tools
+# cubeboot-tools: source for the DISC apploader and mkgbi, which .ci/build_disc_
+# apploader.sh builds into the gbi.hdr baked into cubiboot.iso.
+#
+# This is the cubiboot FORK of makeo/cubeboot-tools. It carries the apploader
+# changes (-O1, PATCH_IPL 3, IGNORE_BOOT_MODE 1, stdbool, the two statics moved to
+# .data) as reviewable commits; they used to be sed rewrites applied at build time.
+# See README-CUBIBOOT.md in that repo for the full diff and rationale.
+#
+# Pinned to a commit on purpose. Tracking a branch would NOT pick changes up
+# anyway -- the image is cached in GHCR keyed on the hash of this Dockerfile, so
+# a moving branch would silently keep serving the revision baked into the cached
+# image. Bumping CUBEBOOT_TOOLS_REF is how you pull tools changes in, and it
+# changes this file's hash, which correctly invalidates that cache.
+ARG CUBEBOOT_TOOLS_REPO=https://github.com/silverstee1/cubeboot-tools.git
+ARG CUBEBOOT_TOOLS_REF=713a1f59a77400b502f4e537c9eb86f96c066360
+RUN git clone "$CUBEBOOT_TOOLS_REPO" /opt/src/cubeboot-tools \
+    && git -C /opt/src/cubeboot-tools checkout --detach "$CUBEBOOT_TOOLS_REF" \
+    && git -C /opt/src/cubeboot-tools --no-pager log --oneline -1
 
 WORKDIR /work

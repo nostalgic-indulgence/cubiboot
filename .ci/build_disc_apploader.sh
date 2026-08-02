@@ -1,44 +1,29 @@
 #!/usr/bin/env bash
 # Rebuild the DISC apploader baked into cubiboot.iso's gbi.hdr (the "El Torito"
-# apploader from cubeboot-tools that the console IPL runs to load cubeboot.dol),
-# with two changes vs the stock prebuilt blob:
+# apploader from cubeboot-tools that the console IPL runs to load cubeboot.dol).
 #
-#   1. Compile at -O1, NOT the Makefile's default -O2. The apploader is 2006-era
-#      gc-linux C that type-puns a char[] DI buffer into packed structs; modern
-#      devkitPPC GCC (13.x) miscompiles that at -O2 (-fstrict-aliasing, on at -O2
-#      and off at -O1, plus aggressive opts) and produces an apploader that
-#      green-screens the console before cubeboot.dol ever runs. -O1 matches the
-#      codegen shape of the known-good shipped blob (frame-based al_start).
+# The apploader source changes themselves NO LONGER LIVE HERE. They are commits
+# in the cubiboot fork of cubeboot-tools, which .ci/Dockerfile clones at a pinned
+# revision -- so the diff against makeo/cubeboot-tools is reviewable in git
+# instead of being a pile of sed rewrites applied at build time. What the fork
+# changes, and why:
 #
-#   2. PATCH_IPL=3 + IGNORE_BOOT_MODE=1 so the apploader suppresses the IPL's
-#      stock boot animation (even on a cold ODE power-on, not just on reset).
-#      Without this the GC Loader plays the stock animation AND then cubeboot's
-#      branded one -> two animations. With it, only cubeboot's branded one plays.
+#   1. apploader Makefile: -O1 instead of -O2. GCC 13 miscompiles this 2006-era
+#      gc-linux C at -O2 (-fstrict-aliasing vs. its type-punned DI buffer) and
+#      green-screens the console before cubeboot.dol ever runs.
+#   2. PATCH_IPL 3 + IGNORE_BOOT_MODE 1: suppress the IPL's stock boot animation,
+#      including on a cold ODE power-on, so only cubiboot's branded animation
+#      plays instead of the stock one followed by cubiboot's. Level 2 is not
+#      enough -- it only calls skip_ipl_animation() at al_load step 8, after the
+#      .dol/FST/bi2.bin reads, so the stock animation visibly plays first. Level 3
+#      also runs hide_ipl_animation() at step 4. Holding A still reaches the stock
+#      IPL menu.
+#   3. #include <stdbool.h> (level 3 does not compile without it) and both
+#      zero-initialised statics forced into .data (the flat `objcopy -O binary`
+#      image has no .bss, so they would be garbage RAM at runtime).
 #
-#      PATCH_IPL=2 alone is NOT enough, and that is what produced the "snippet of
-#      the stock animation, then cubeboot's animation" behaviour: level 2 only
-#      calls skip_ipl_animation(), which runs at al_load step 8 -- i.e. AFTER the
-#      whole cubeboot.dol, the FST and bi2.bin have been read off the disc. The
-#      animation is happily drawing for that entire read, so you see the first
-#      second or so of it before it is cut off. Level 3 additionally enables
-#      hide_ipl_animation(), which runs at step 4 (before the first .dol section
-#      is read) and NOPs the IPL's three cube-drawing calls + zeroes its sound
-#      level for all 11 IPL revisions, so nothing is drawn or heard from the very
-#      start. skip_ipl_animation() then still ends the splash at step 8 as before.
-#      Holding A (DISABLE_A_SKIP=0) still suppresses the hide, so the stock IPL
-#      menu remains reachable.
-#
-#   3. Two source fixes needed to make level 3 usable, applied below:
-#        a. hide_ipl_animation() uses bool/true/false but the vendored
-#           apploader.c never includes <stdbool.h> (it compiles at levels 1 and 2
-#           because nothing else uses bool), so level 3 fails to build outright.
-#        b. its two zero-initialised statics (`applied`, `sound_level_val`) land
-#           in .bss, and the apploader is shipped as a flat `objcopy -O binary`
-#           image -- .bss is NOBITS, so it is past the end of apploader.bin and
-#           the IPL never zeroes it. `applied` would come up as garbage RAM
-#           (hide silently does nothing) and the garbage `sound_level_val` would
-#           be swapped into the IPL's sound level. Forcing both into .data makes
-#           them part of the loaded image; the build asserts .bss is empty.
+# This script verifies the checkout actually carries all of that, then builds and
+# asserts the result (entry point, empty .bss).
 #
 # This regenerates /opt/src/cubeboot-tools/mkgbi/gbi.hdr and then copies it to
 # <repo>/gbi.hdr, which is what build_iso.sh consumes. The copy matters: that path
@@ -61,23 +46,27 @@ MKGBI_DIR="$TOOLS/mkgbi"
 
 [ -f "$APPLOADER_DIR/apploader.c" ] || { echo "ERROR: apploader.c not found in $APPLOADER_DIR" >&2; exit 1; }
 
-# Enable the IPL animation hide+skip. (Source ships PATCH_IPL 1 / IGNORE_BOOT_MODE 0.)
-sed -i \
-    -e 's/#define PATCH_IPL 1/#define PATCH_IPL 3/' \
-    -e 's/#define IGNORE_BOOT_MODE 0/#define IGNORE_BOOT_MODE 1/' \
-    -e 's|^#include <stddef.h>|#include <stdbool.h>\n#include <stddef.h>|' \
-    -e 's/^\(\s*\)static bool applied = false;/\1static bool applied __attribute__((section(".data"))) = false;/' \
-    -e 's/^\(\s*\)static uint32_t sound_level_val = 0;/\1static uint32_t sound_level_val __attribute__((section(".data"))) = 0;/' \
-    "$APPLOADER_DIR/apploader.c"
-grep -qE '^#define PATCH_IPL 3'        "$APPLOADER_DIR/apploader.c" || { echo "ERROR: failed to set PATCH_IPL=3" >&2; exit 1; }
-grep -qE '^#define IGNORE_BOOT_MODE 1' "$APPLOADER_DIR/apploader.c" || { echo "ERROR: failed to set IGNORE_BOOT_MODE=1" >&2; exit 1; }
-grep -qE '^#include <stdbool.h>'       "$APPLOADER_DIR/apploader.c" || { echo "ERROR: failed to add stdbool.h include" >&2; exit 1; }
-grep -qE 'static bool applied __attribute__\(\(section\(".data"\)\)\)'       "$APPLOADER_DIR/apploader.c" || { echo "ERROR: failed to move 'applied' to .data" >&2; exit 1; }
-grep -qE 'static uint32_t sound_level_val __attribute__\(\(section\(".data"\)\)\)' "$APPLOADER_DIR/apploader.c" || { echo "ERROR: failed to move 'sound_level_val' to .data" >&2; exit 1; }
+# These changes now live in the cubeboot-tools FORK the image clones (see
+# .ci/Dockerfile), as reviewable commits rather than sed rewrites applied here.
+# Verify the checkout really carries them: a wrong/stale tools revision must fail
+# loudly, not silently produce a stock apploader that plays the IPL animation.
+check() {
+    grep -qE "$1" "$APPLOADER_DIR/apploader.c" || {
+        echo "ERROR: cubeboot-tools checkout is missing '$2'." >&2
+        echo "       Expected the cubiboot fork (see .ci/Dockerfile CUBEBOOT_TOOLS_*)." >&2
+        exit 1
+    }
+}
+check '^#define PATCH_IPL 3'        "PATCH_IPL 3"
+check '^#define IGNORE_BOOT_MODE 1' "IGNORE_BOOT_MODE 1"
+check '^#include <stdbool.h>'       "#include <stdbool.h>"
+check 'static bool applied __attribute__\(\(section\(".data"\)\)\)'             "applied in .data"
+check 'static uint32_t sound_level_val __attribute__\(\(section\(".data"\)\)\)' "sound_level_val in .data"
+grep -qE '^CFLAGS := -O1' "$APPLOADER_DIR/Makefile" || { echo "ERROR: apploader Makefile is not -O1 (GCC 13 miscompiles it at -O2)" >&2; exit 1; }
 
-# Build the apploader at -O1 (command-line CFLAGS overrides the Makefile's -O2).
+# Build. -O1 comes from the fork's Makefile, so no CFLAGS override here.
 make -C "$APPLOADER_DIR" clean >/dev/null
-make -C "$APPLOADER_DIR" CFLAGS=-O1
+make -C "$APPLOADER_DIR"
 
 OBJDUMP="${DEVKITPPC:-/opt/devkitpro/devkitPPC}/bin/powerpc-eabi-objdump"
 
