@@ -18,6 +18,12 @@ __attribute_reloc__ GXRModeObj *rmode;
 // from main
 __attribute_reloc__ state *cube_state;
 
+// boot-animation suppression (see bs2tick in main.c)
+__attribute_reloc__ u32 *anim_draw_cubes;
+__attribute_reloc__ u32 *anim_draw_outer;
+__attribute_reloc__ u32 *anim_draw_inner;
+__attribute_reloc__ u32 *anim_sound_level;
+
 // from menu
 __attribute_reloc__ u32 (*OSDisableInterrupts)();
 __attribute_reloc__ BOOL (*OSRestoreInterrupts)(BOOL);

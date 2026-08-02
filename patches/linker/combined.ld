@@ -1,3 +1,44 @@
+/* Boot-animation draw calls + sound level, from Extrems' apploader
+ * hide_ipl_animation() (cubeboot-tools ppc/apploader/apploader.c). NOPping the
+ * three draw calls is what makes the animation genuinely not appear; nothing
+ * inside the animation's own state machine can do it. anim_draw_inner is always
+ * anim_draw_cubes + 0x3C on every revision, which cross-checks the table. */
+ntsc10_anim_draw_cubes = 0x8131055c;
+ntsc10_anim_draw_outer = 0x8130d224;
+ntsc10_anim_draw_inner = 0x81310598;
+ntsc10_anim_sound_level = 0x8145d4d0;
+
+ntsc11_anim_draw_cubes = 0x81310754;
+ntsc11_anim_draw_outer = 0x8130d428;
+ntsc11_anim_draw_inner = 0x81310790;
+ntsc11_anim_sound_level = 0x81481278;
+
+ntsc12_001_anim_draw_cubes = 0x81310aec;
+ntsc12_001_anim_draw_outer = 0x8130d79c;
+ntsc12_001_anim_draw_inner = 0x81310b28;
+ntsc12_001_anim_sound_level = 0x81483340;
+
+ntsc12_101_anim_draw_cubes = 0x81310b04;
+ntsc12_101_anim_draw_outer = 0x8130d7b4;
+ntsc12_101_anim_draw_inner = 0x81310b40;
+ntsc12_101_anim_sound_level = 0x814837c0;
+
+pal10_anim_draw_cubes = 0x81310e94;
+pal10_anim_draw_outer = 0x8130d868;
+pal10_anim_draw_inner = 0x81310ed0;
+pal10_anim_sound_level = 0x814ad118;
+
+/* pal11 is MPAL (apploader IPL_MPAL_11) */
+pal11_anim_draw_cubes = 0x81310680;
+pal11_anim_draw_outer = 0x8130d354;
+pal11_anim_draw_inner = 0x813106bc;
+pal11_anim_sound_level = 0x8147bf38;
+
+pal12_anim_draw_cubes = 0x81310fd4;
+pal12_anim_draw_outer = 0x8130d9a8;
+pal12_anim_draw_inner = 0x81311010;
+pal12_anim_sound_level = 0x814af400;
+
 ntsc10_OSSetCurrentContext = 0x81334300;
 ntsc10_OSClearContext = 0x813344c8;
 ntsc10___OSSetInterruptHandler = 0x813361fc;

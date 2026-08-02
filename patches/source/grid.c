@@ -4,6 +4,7 @@
 #include <gctypes.h>
 #include "reloc.h"
 #include "attr.h"
+#include "picolibc.h" // for memset
 
 #include "grid.h"
 #include "menu.h"
@@ -40,14 +41,20 @@ void grid_setup_func() {
     OSReport("browser_lines = %p\n", browser_lines);
     OSReport("number_of_lines = %d\n", number_of_lines);
 
-    for (int line_num = 0; line_num < MAX_LINES; line_num++) {
-        line_backing_t *line_backing = &browser_lines[line_num];
-        line_backing->transparency = 0.0;
-
-        anim_list_t *anims = &line_backing->anims;
-        anims->pending_count = 0;
-        anims->remaining = 0;
-    }
+    // browser_lines lives in .data_empty, which the linker marks (NOLOAD): it is
+    // never loaded from the image nor zeroed at runtime, so every field starts
+    // as whatever was in RAM at 0x81600000 on this boot.
+    //
+    // Clearing transparency/pending_count/remaining by hand (as this used to)
+    // is not enough -- it leaves moving_in and moving_out garbage. The rows
+    // below the initial window get transparency = 0.0 just after this, but
+    // grid_update_icon_positions() fades a row back IN whenever moving_in is
+    // set, so a stray non-zero byte there walks rows 5+ up to fully opaque and
+    // draws them behind the banner. It only cleared up after scrolling to the
+    // bottom and back, because the navigate handlers are the only other code
+    // that assigns moving_in/moving_out, and it showed up on some boots and not
+    // others because it depends on leftover RAM. Zero the lot.
+    memset(browser_lines, 0, sizeof(browser_lines));
 
     // initial
     selected_slot = START_LINE * 8;

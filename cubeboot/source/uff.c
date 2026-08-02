@@ -154,24 +154,22 @@ FRESULT uf_open(const char* path) {
 }
 
 FRESULT uf_read(void* buff, UINT btr, UINT* br) {
-    // read 4k at a time and copy to buff
-    // u32 btr_left = btr;
-
-    // TODO: support unaligned reads and undersized reads
-    dvd_read_data(buff, btr, __file_offset, __current_file.fd);
-
-    // u32 btr_read = 0;
-    // while (btr_left > 0) {
-    //     u32 read_size = btr_left > 4096 ? 4096 : btr_left;
-    //     u32 padded_read_size = (read_size + 31) & ~31;
-
-    //     dvd_read(__file_buffer, padded_read_size, __file_offset);
-    //     memcpy((u8*)buff + btr_read, __file_buffer, read_size);
-    //     btr_read += read_size;
-    //     btr_left -= read_size;
-    // }
+    // dvd_read_data() is the right call here, not dvd_read(): it is an alignment
+    // wrapper that bounces unaligned buffers/lengths/offsets through an aligned
+    // staging buffer before handing off to dvd_read(). That matters for the
+    // DMA-backed devices, and the config buffer's length is not 32-byte aligned.
+    //
+    // Only the error handling was missing -- the result used to be discarded and
+    // FR_OK returned unconditionally, so a failed read surfaced as a silently
+    // empty config rather than an error.
+    int ret = dvd_read_data(buff, btr, __file_offset, __current_file.fd);
+    if (ret != 0) {
+        iprintf("uf_read failed: %u bytes at %u (err=%d)\n", btr, __file_offset, ret);
+        return FR_DISK_ERR;
+    }
 
     __file_offset += btr;
+    if (br) *br = btr;
     return FR_OK;
 }
 

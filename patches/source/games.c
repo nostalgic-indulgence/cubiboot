@@ -352,9 +352,36 @@ __attribute_aligned_data_lowmem__ static u8 gm_heap_buffer[2 * 1024 * 1024];
 #define gm_malloc(x) pmalloc_memalign(pm, x, 32);
 #define gm_free(x) pmalloc_freealign(pm, x);
 
+// pmalloc-backed allocation shims used by the PNG cube-logo loader.
+// upng.c routes malloc/free here; load_cube_logo() uses gm_memalign/gm_freealign.
+void *gm_upng_alloc(unsigned long size) {
+    return pmalloc_malloc(pm, (uint32_t)size);
+}
+
+void gm_upng_free(void *ptr) {
+    if (ptr != NULL) pmalloc_free(pm, ptr);
+}
+
+void *gm_memalign(u32 size, u32 align) {
+    return pmalloc_memalign(pm, size, align);
+}
+
+void gm_freealign(void *ptr) {
+    if (ptr != NULL) pmalloc_freealign(pm, ptr);
+}
+
 void gm_init_heap() {
     OSReport("Initializing heap [%x]\n", sizeof(gm_heap_buffer));
-    
+
+    // The asset pools live in .data_lowmem, which the linker marks (NOLOAD):
+    // it is never loaded from the DOL nor zeroed at runtime, so the `= {}`
+    // static initializer is discarded and every .used flag starts as garbage
+    // RAM. Clear them here so all slots actually begin free; otherwise
+    // gm_get_banner_buf()/gm_get_icon_buf() see random slots as "used" and
+    // fail with "could not allocate memory" after only a few banners.
+    memset(gm_icon_pool, 0, sizeof(gm_icon_pool));
+    memset(gm_banner_pool, 0, sizeof(gm_banner_pool));
+
     // Initialise our pmalloc
 	pmalloc_init(pm);
 	pmalloc_addblock(pm, &gm_heap_buffer[0], sizeof(gm_heap_buffer));
@@ -481,6 +508,7 @@ int gm_cmp_path_entry(const void* ptr_a, const void* ptr_b){
 // DEFS
 typedef struct {
     int num_paths;
+    bool ok;        // false if target_dir could not be opened at all
 } gm_list_info;
 
 // 1. func named gm_list_files returns {pointer to path array, number of paths}
@@ -494,17 +522,20 @@ gm_list_info gm_list_files(const char *target_dir) {
     OSReport("Listing files in %s\n", target_dir);
     u64 start_time = gettime();
 
+    // A directory that will not open is reported, not fatal. The caller decides:
+    // the target directory is the SD card being unreadable and still panics, but
+    // the background warm-up walk just skips it -- it runs while the menu is
+    // live, so hanging there would freeze a working menu.
     int res = dvd_custom_open(target_dir, FILE_ENTRY_TYPE_DIR, 0);
     if (res != 0) {
-        OSReport("PANIC: SD Card could not be opened\n");
-        while(1);
+        OSReport("ERROR: could not open dir %s\n", target_dir);
+        return (gm_list_info){0, false};
     }
 
-    // TODO: if the SD card is not inserted this would be a good place to bail out 
     file_status_t *status = dvd_custom_status();
     if (status->result != 0) {
-        OSReport("PANIC: SD Card could not be opened\n");
-        while(1);
+        OSReport("ERROR: could not stat dir %s\n", target_dir);
+        return (gm_list_info){0, false};
     }
 
     uint8_t dir_fd = status->fd;
@@ -567,7 +598,7 @@ gm_list_info gm_list_files(const char *target_dir) {
     OSReport("File enum completed! took=%f (%d)\n", runtime, game_backing_count);
     (void)runtime;
 
-    return (gm_list_info){path_entry_count};
+    return (gm_list_info){path_entry_count, true};
 }
 
 void gm_sort_files(int path_count) {
@@ -579,25 +610,43 @@ void gm_sort_files(int path_count) {
     OSReport("Sort took=%f\n", runtime);
     (void)runtime;
 }
+// Scratch for a single opening.bnr (~8 KB). Shared by gm_load_banner() and the
+// gm_warm_files() pass below -- both only ever run on the enumeration thread,
+// one at a time, so a second buffer would just be 8 KB of lowmem wasted.
+__attribute_aligned_data_lowmem__ static BNR banner_buffer;
+
 // returns amount of space used in aram
-static int gm_load_banner(gm_file_entry_t *entry, u32 aram_offset, bool force_unload) {
-    if (entry->extra.dvd_bnr_offset == 0) return false;
+//
+// open_fd is the descriptor get_game_info() left open on this same file, or -1
+// if the caller has nothing open. Either way this function closes it before
+// returning, on every path.
+static int gm_load_banner(gm_file_entry_t *entry, u32 aram_offset, bool force_unload, int open_fd) {
+    int fd = open_fd;
 
-    __attribute_aligned_data_lowmem__ static BNR banner_buffer;
-    if (bnr_cache_get(entry->extra.game_id, &banner_buffer))
-        goto cached;
-
-    // load the banner
-    dvd_custom_open(entry->path, FILE_ENTRY_TYPE_FILE, IPC_FILE_FLAG_DISABLECACHE | IPC_FILE_FLAG_DISABLESPEEDEMU);
-    file_status_t *status = dvd_custom_status();
-    if (status == NULL || status->result != 0) {
-        OSReport("ERROR: could not open file\n");
+    if (entry->extra.dvd_bnr_offset == 0) {
+        if (fd >= 0) dvd_custom_close(fd);
         return false;
     }
 
+    if (bnr_cache_get(entry->extra.game_id, &banner_buffer)) {
+        if (fd >= 0) dvd_custom_close(fd);
+        goto cached;
+    }
+
+    if (fd < 0) {
+        // Nothing handed to us -- open the file ourselves.
+        dvd_custom_open(entry->path, FILE_ENTRY_TYPE_FILE, IPC_FILE_FLAG_DISABLECACHE | IPC_FILE_FLAG_DISABLESPEEDEMU);
+        file_status_t *status = dvd_custom_status();
+        if (status == NULL || status->result != 0) {
+            OSReport("ERROR: could not open file\n");
+            return false;
+        }
+        fd = status->fd;
+    }
+
     //__attribute_aligned_data_lowmem__ static BNR banner_buffer;
-    dvd_threaded_read(&banner_buffer, sizeof(BNR), entry->extra.dvd_bnr_offset, status->fd);
-    dvd_custom_close(status->fd);
+    dvd_threaded_read(&banner_buffer, sizeof(BNR), entry->extra.dvd_bnr_offset, fd);
+    dvd_custom_close(fd);
 
     bnr_cache_put(entry->extra.game_id, &banner_buffer);
     cached:
@@ -715,8 +764,12 @@ void gm_check_files(int path_count) {
         if (entry->type == GM_FILE_TYPE_GAME) {
             // OSReport("DEBUG: Game Check %d\n", i);
             // check if the banner file exists
-            dolphin_game_into_t info = get_game_info(entry->path);
-            if (!info.valid) continue;
+            // Keep the file open across into gm_load_banner() below, which
+            // needs the same file: a second dvd_custom_open() would make FatFs
+            // scan this directory from the start all over again.
+            int game_fd = -1;
+            dolphin_game_into_t info = get_game_info(entry->path, &game_fd);
+            if (!info.valid) continue; // get_game_info() closed it
             OSReport("Found game %s (%d)\n", entry->path, force_unload); // lets do this!
 
             // create a new entry
@@ -736,8 +789,8 @@ void gm_check_files(int path_count) {
             backing->extra.dvd_fst_size = info.fst_size;
             backing->extra.dvd_max_fst_size = info.max_fst_size;
 
-            // load the banner
-            bool bnr_loaded = gm_load_banner(backing, aram_offset, force_unload);
+            // load the banner (takes ownership of game_fd and closes it)
+            bool bnr_loaded = gm_load_banner(backing, aram_offset, force_unload, game_fd);
             if (!bnr_loaded) {
                 OSReport("Failed to load banner %s\n", entry->path);
             }
@@ -948,61 +1001,140 @@ void gm_setup_grid(int line_count, bool initial) {
     }
 }
 
-void *gm_thread_worker(void* param) {
-    const char *target = &game_enum_path[0];
-    if (target == NULL || strlen(target) == 0) {
-        OSReport("ERROR: target is NULL\n");
-        return NULL;
+// Reads every game's banner in the just-listed directory into bnr_cache.
+//
+// Deliberately does NOT go through gm_check_files(): by the time this runs the
+// menu is live and reading gm_entry_backing / gm_entry_count /
+// game_backing_count, so writing them would yank entries out from under it.
+// This only touches the path lists (which nothing outside this file reads) and
+// bnr_cache. It also allocates nothing, and skips icons and the ARAM staging
+// that gm_check_files() does for on-screen entries -- none of that is wanted
+// for a directory the user is not looking at.
+//
+// Returns false if it was asked to stop.
+static bool gm_warm_files(int path_count) {
+    for (int i = 0; i < path_count; i++) {
+        gm_path_entry_t *entry = __gm_sorted_path_list[i];
+        if (entry->type != GM_FILE_TYPE_GAME) continue;
+
+        // Same cooperative stop as gm_check_files().
+        if (!OSTryLockMutex(game_enum_mutex)) {
+            OSReport("STOPPING BANNER WARMUP\n");
+            return false;
+        }
+        OSUnlockMutex(game_enum_mutex);
+
+        int fd = -1;
+        dolphin_game_into_t info = get_game_info(entry->path, &fd);
+        if (!info.valid) continue; // get_game_info() closed it
+
+        // Already cached (or nothing to cache) -- just let the file go.
+        if (info.bnr_offset == 0 || bnr_cache_get(info.game_id, &banner_buffer)) {
+            if (fd >= 0) dvd_custom_close(fd);
+            continue;
+        }
+
+        dvd_threaded_read(&banner_buffer, sizeof(BNR), info.bnr_offset, fd);
+        dvd_custom_close(fd);
+        bnr_cache_put(info.game_id, &banner_buffer);
     }
 
-    static bool fill_cache = true;
-    if (fill_cache) {
-        fill_cache = false;
-        
-        char path_stack[100][128];
-        int path_count = 1;
-        strcpy(path_stack[0], "/");
+    return true;
+}
 
-        while (path_count > 0) {
-            char* cur = path_stack[--path_count];
-            gm_list_info list_info = gm_list_files(cur);
-            gm_sort_files(list_info.num_paths);
-            gm_check_files(list_info.num_paths);
-            if (gm_entry_count > 0) {
-                for (int i = 0; i < gm_entry_count; i++) {
-                    gm_file_entry_t *entry = gm_entry_backing[i];
-                    if (entry->type == GM_FILE_TYPE_GAME) {
-                        gm_icon_free(&entry->asset.icon);
-                        gm_banner_free(&entry->asset.banner);
-                    } else {
-                        gm_icon_free(&entry->asset.icon);
-                    }
-                    gm_free(entry);
-                }
-                gm_entry_count = 0;
-            }
+// Walks the whole card warming bnr_cache, so browsing into another directory
+// later does not have to go back to the SD card for its banners.
+//
+// This used to run BEFORE the target directory was enumerated, which meant
+// every directory, every game header and every banner on the card had to be
+// read before the menu could draw anything -- on a large collection, the single
+// biggest chunk of time-to-menu, spent almost entirely on directories the user
+// had not asked for. It now runs after, so the menu comes up as soon as the
+// directory actually being viewed is ready and this continues behind it.
+//
+// Returns false if it was asked to stop before finishing.
+static bool gm_warm_card(const char *skip_dir) {
+    u64 start_time = gettime();
 
-            for (int i = 0; i < list_info.num_paths; i++) {
-                gm_path_entry_t* entry = __gm_sorted_path_list[i];
+    char path_stack[100][128];
+    int path_count = 1;
+    strcpy(path_stack[0], "/");
 
-                if (entry->type == GM_FILE_TYPE_DIRECTORY) {
-                    char subdir_path[128];
-                    strcpy(subdir_path, entry->path);
-                    strcat(subdir_path, "/");
+    while (path_count > 0) {
+        if (!OSTryLockMutex(game_enum_mutex)) {
+            OSReport("STOPPING BANNER WARMUP\n");
+            return false;
+        }
+        OSUnlockMutex(game_enum_mutex);
 
-                    if (path_count < 100) {
-                        strcpy(path_stack[path_count++], subdir_path);
-                    }
+        // Copied out because the push loop below writes to this same slot.
+        char cur[128];
+        strcpy(cur, path_stack[--path_count]);
+
+        gm_list_info list_info = gm_list_files(cur);
+        if (!list_info.ok) continue; // unreadable directory, skip it
+
+        // The target directory was just enumerated in full, banners and all, so
+        // re-reading it here would be a second pass for nothing.
+        if (skip_dir == NULL || strcmp(cur, skip_dir) != 0) {
+            if (!gm_warm_files(list_info.num_paths)) return false;
+        }
+
+        for (int i = 0; i < list_info.num_paths; i++) {
+            gm_path_entry_t* entry = __gm_sorted_path_list[i];
+
+            if (entry->type == GM_FILE_TYPE_DIRECTORY) {
+                char subdir_path[128];
+                strcpy(subdir_path, entry->path);
+                strcat(subdir_path, "/");
+
+                if (path_count < 100) {
+                    strcpy(path_stack[path_count++], subdir_path);
                 }
             }
         }
     }
 
-    gm_list_info list_info = gm_list_files(target);
-    gm_setup_grid(list_info.num_paths, true);
-    gm_sort_files(list_info.num_paths);
-    gm_check_files(list_info.num_paths);
-    gm_setup_grid(gm_entry_count, false);
+    f32 runtime = (f32)diff_usec(start_time, gettime()) / 1000.0;
+    OSReport("Banner warmup completed! took=%f\n", runtime);
+    (void)runtime;
+
+    return true;
+}
+
+void *gm_thread_worker(void* param) {
+    static bool warm_pending = true;
+
+    const char *target = &game_enum_path[0];
+    if (target == NULL || strlen(target) == 0) {
+        // Falls through to clear game_enum_running below -- returning early
+        // would leave it set and gm_start_thread() would refuse forever after.
+        OSReport("ERROR: target is NULL\n");
+    } else {
+        // What the user is actually looking at, first, so the menu comes up as
+        // soon as it possibly can.
+        gm_list_info list_info = gm_list_files(target);
+        if (!list_info.ok) {
+            // The target directory failing to open is the SD card itself being
+            // unreadable; nothing below can work, so keep the original panic.
+            OSReport("PANIC: SD Card could not be opened\n");
+            while(1);
+        }
+        gm_setup_grid(list_info.num_paths, true);
+        gm_sort_files(list_info.num_paths);
+        gm_check_files(list_info.num_paths);
+        gm_setup_grid(gm_entry_count, false);
+
+        // Only then walk the rest of the card, behind the live menu. The flag is
+        // cleared on completion rather than up front, so a warm-up cut short by
+        // the user navigating away is retried on the next enumeration instead of
+        // being silently dropped for the rest of the boot. Re-runs are cheap:
+        // the block cache still holds the directory sectors and bnr_cache_put()
+        // dedupes.
+        if (warm_pending) {
+            if (gm_warm_card(target)) warm_pending = false;
+        }
+    }
 
     game_enum_running = false;
     // DCBlockStore((void*)OSRoundDown32B((u32)&game_enum_running));
@@ -1054,6 +1186,11 @@ void gm_start_thread(const char *target) {
 
     OSReport("Starting game thread %s\n", path);
     strcpy(game_enum_path, path);
+
+    // The boot path disables the block cache before loading anything into RAM,
+    // and can come back here if that load bailed out early. Re-arm it, dropping
+    // any pages from before, since browsing is what it exists for.
+    dvm_cache_enable();
 
     game_enum_running = true;
     DCBlockStore((void*)OSRoundDown32B((u32)&game_enum_running));

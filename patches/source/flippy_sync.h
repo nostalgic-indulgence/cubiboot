@@ -55,4 +55,12 @@ int dvd_custom_open(const char *path, uint8_t type, uint8_t flags);
 int dvd_custom_open_flash(const char *path, uint8_t type, uint8_t flags);
 void dvd_custom_bypass_enter();
 void dvd_custom_bypass_exit();
+
+// Storage block cache (emu/ffs/dvm_cache.c). Declared here so the boot path can
+// reach it without pulling the FatFs headers in. Anything that loads a program
+// into memory must dvm_cache_disable() first -- the cache's page buffer is
+// ordinary RAM that a loaded DOL will happily sit on top of, while its metadata
+// lives in the patch region and survives. See dvm_cache.h for the full story.
+void dvm_cache_disable(void);
+void dvm_cache_enable(void);
 int dvd_custom_presence(bool playing, const char *status, const char* sub_status);

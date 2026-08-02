@@ -20,6 +20,12 @@ extern GXRModeObj *rmode;
 // from main
 extern state *cube_state;
 
+// boot-animation suppression (see bs2tick in main.c)
+extern u32 *anim_draw_cubes;
+extern u32 *anim_draw_outer;
+extern u32 *anim_draw_inner;
+extern u32 *anim_sound_level;
+
 // from menu
 extern u32 (*OSDisableInterrupts)();
 extern BOOL (*OSRestoreInterrupts)(BOOL);

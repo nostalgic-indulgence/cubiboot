@@ -198,17 +198,45 @@ void apply_additional_patches() {
     if (bios_index < 0)
         return;
 
-    // disable exi probe for sd slot
-    const char* dev = emu_get_device(); 
+    // Disable the IPL's EXI probe for whichever slot our SD card is in.
+    //
+    // This matters more than it looks: an SD adapter in memory-card slot A is on
+    // EXI channel 0 device 0, exactly where the IPL expects a memory card. If the
+    // IPL probes that slot it drives the same EXI device we are trying to read,
+    // and our SD access fails for as long as the probe is running -- which is
+    // early in the IPL, right when pre_thread_init() loads the boot logo.
+    //
+    // These writes patch IPL *code* from the data side, so they MUST be paired
+    // with a flush + icache invalidate. Without it the store can sit dirty in
+    // dcache while the CPU fetches the stale instruction from RAM, and the probe
+    // is never actually disabled. (It appeared to work only because the ~100KB
+    // patch-copy loop that runs afterwards tends to evict the line -- luck, not
+    // correctness.) Same defect and same fix as the IPL patching elsewhere.
+    const char* dev = emu_get_device();
+    if (dev == NULL) {
+        iprintf("apply_additional_patches: no device, skipping EXI probe patch\n");
+        return;
+    }
+
+    u32 addr = 0;
+    u32 value = 0x38600000; // li r3, 0
     if (strcmp(dev, "sda") == 0) {
         u32 probe_card_0[] = { 0x8131b1c4, 0x8131b8f0, 0x8131bc88, 0x8131bca0, 0x8131c29c, 0x8131b81c, 0x8131c3dc };
-        *(u32*)probe_card_0[bios_index] = 0x38600000; // li r3, 0
+        addr = probe_card_0[bios_index];
     } else if (strcmp(dev, "sdb") == 0) {
         u32 probe_card_1[] = { 0x8131b274, 0x8131b9a0, 0x8131bd38, 0x8131bd50, 0x8131c34c, 0x8131b8cc, 0x8131c48c };
-        *(u32*)probe_card_1[bios_index] = 0x38600000; // li r3, 0
+        addr = probe_card_1[bios_index];
     } else if (strcmp(dev, "sdc") == 0) {
         u32 init_ad16_addr[] = { 0x81335f54, 0x8135b9b4, 0x8136572c, 0x81365890, 0x8135ef94, 0x8135b8d4, 0x81368c08 };
-        *(u32*)init_ad16_addr[bios_index] = 0x4e800020; // blr
+        addr = init_ad16_addr[bios_index];
+        value = 0x4e800020; // blr
+    }
+
+    if (addr != 0) {
+        iprintf("Disabling IPL EXI probe for %s at %08x (was %08x)\n", dev, addr, *(u32*)addr);
+        *(u32*)addr = value;
+        DCFlushRange((void*)addr, 4);
+        ICInvalidateRange((void*)addr, 4);
     }
 }
 

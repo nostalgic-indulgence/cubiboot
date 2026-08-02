@@ -122,6 +122,17 @@ typedef struct {
 
 _Static_assert(sizeof(dolphin_game_into_t) == 32);
 
-dolphin_game_into_t get_game_info(char *game_path);
+// Opens game_path and reads out enough of the disc header to identify the game
+// and locate its opening.bnr.
+//
+// out_fd may be NULL, in which case the file is always closed before returning.
+// If it is non-NULL and the game turns out to be valid, the file is left OPEN
+// and its descriptor stored there, so the caller can go straight on to reading
+// the banner without a second open -- an open is a linear scan of the directory
+// in FatFs, so for a directory of N games doing it twice per game is the
+// difference between N and 2N such scans. The caller then owns the descriptor
+// and must dvd_custom_close() it. *out_fd is set to -1 in every other case
+// (invalid game, open failure), meaning nothing is left open.
+dolphin_game_into_t get_game_info(char *game_path, int *out_fd);
 
 #endif

@@ -9,6 +9,7 @@
 #include "../reloc.h"
 #include "../attr.h"
 #include "../gc_dvd.h"
+#include "../time.h"   // udelay, for the mount settle-retry below
 #include "config.h"
 #else
 #include <stdio.h>
@@ -24,9 +25,23 @@ __attribute_data__ int emu_sd_device;
 #else
 int emu_sd_device = -1;
 #endif
-static const char* device_prio[] = { "sdc", "sdb", "sda" };
+// Storage devices tried in order; the first that mounts a FAT filesystem wins.
+// The GCLoader's SD card on the disc interface (DI) bus first, then SD adapters
+// on the EXI bus (SD2SP2 / SD Gecko), then IDE-EXI (ATA-over-EXI) drives. The
+// names must match both the FatFs volume strings (FF_VOLUME_STRS in ffconf.h)
+// and Swiss's device names (used for the Swiss Autoload= handoff). Reorder if a
+// different device should take priority on your setup.
+static const char* device_prio[] = { "gcldr", "sdc", "sdb", "sda", "ataa", "atab", "atac" };
 
 static bool passthrough = false;
+
+// Non-IPL (cubeboot.dol) gecko diagnostics. iprintf resolves to cubeboot's
+// gecko printf (print.c). Compiled out in the IPL build, which has no iprintf.
+#if !defined(IPL_CODE) && defined(GECKO_PRINT_ENABLE)
+#define EMU_DBG(...) iprintf(__VA_ARGS__)
+#else
+#define EMU_DBG(...)
+#endif
 
 const char* emu_get_device() {
 	return emu_sd_device < 0 ? NULL : device_prio[emu_sd_device];
@@ -39,18 +54,61 @@ bool flippy_emu_mount() {
 	if (mounted)
 		return true;
 
-	if (emu_sd_device < 0)
-		return false;
-
 	static char mount_path[256];
-	memcpy(mount_path, device_prio[emu_sd_device], strlen(device_prio[emu_sd_device]) + 1);
-	strcat(mount_path, ":");
-	if (f_mount(&fs, mount_path, 1) != FR_OK)
-		return false;
+	int num_devices = sizeof(device_prio) / sizeof(device_prio[0]);
 
-	mounted = true;
-	emu_update_boot();
-	return true;
+	// Retry the device cubeboot.dol already found -- and ONLY that device.
+	//
+	// Do NOT probe the rest of the chain from here. device_prio contains the
+	// IDE-EXI entries, and "ataa" is EXI channel 0 device 0 -- the very same port
+	// an SD card in memory-card slot A sits on. Probing ATA there pushes ATA
+	// register writes at the SD card. A gecko trace of a PicoBoot + SD-slot-A
+	// boot showed the logo's mount attempt doing exactly that:
+	//     ATA init chn=0: status=ff / ATA chn=0: BSY never cleared (no drive)
+	// three times over, before giving up -- slow, and poking the card we are
+	// actually trying to read.
+	//
+	// cubeboot.dol has already probed and told us the answer via emu_sd_device,
+	// so the IPL side only needs to wait for that one device to come up. This is
+	// the first storage access on the IPL side (its own FATFS, its own driver
+	// state), an EXI SD can need a moment, and load_cube_logo() gets a single
+	// shot before the enumeration thread takes over the DVD interface.
+	if (emu_sd_device >= 0 && emu_sd_device < num_devices) {
+		memcpy(mount_path, device_prio[emu_sd_device], strlen(device_prio[emu_sd_device]) + 1);
+		strcat(mount_path, ":");
+
+		for (int attempt = 0; attempt < 30; attempt++) {
+			if (f_mount(&fs, mount_path, 1) == FR_OK) {
+				OSReport("emu: IPL mounted %s after %d retries\n", mount_path, attempt);
+				mounted = true;
+				emu_update_boot();
+				return true;
+			}
+			udelay(10 * 1000); // 10ms; up to ~300ms total
+		}
+
+		OSReport("emu: IPL could not mount %s\n", mount_path);
+		return false;
+	}
+
+	// Only reached if cubeboot.dol never identified a device. Probe the chain as
+	// a last resort; the ATA caveat above applies, but a boot with no storage at
+	// all is worse.
+	for (int i = 0; i < num_devices; i++) {
+		memcpy(mount_path, device_prio[i], strlen(device_prio[i]) + 1);
+		strcat(mount_path, ":");
+		if (f_mount(&fs, mount_path, 1) != FR_OK)
+			continue;
+
+		OSReport("emu: IPL mounted %s (probed; cubeboot.dol had none)\n", mount_path);
+		emu_sd_device = i;
+		mounted = true;
+		emu_update_boot();
+		return true;
+	}
+
+	OSReport("emu: IPL failed to mount any device\n");
+	return false;
 
 	#else
 
@@ -60,10 +118,13 @@ bool flippy_emu_mount() {
 			static char mount_path[256];
 			memcpy(mount_path, device_prio[i], strlen(device_prio[i]) + 1);
 			strcat(mount_path, ":");
+			EMU_DBG("mount try %s ...\n", device_prio[i]);
 			if (f_mount(&fs, mount_path, 1) == FR_OK) {
+				EMU_DBG("mount %s OK\n", device_prio[i]);
 				emu_sd_device = i;
 				return true;
 			}
+			EMU_DBG("mount %s fail\n", device_prio[i]);
 		}
 		return false;
 	}

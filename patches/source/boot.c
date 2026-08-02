@@ -26,6 +26,11 @@
 
 void load_stub() {
     custom_OSReport("Loading stub...\n");
+
+    // We are about to write to a fixed address in RAM; the block cache's page
+    // buffer is RAM too. See load_dol() below.
+    dvm_cache_disable();
+
     dvd_custom_open_flash("/stub.bin", FILE_ENTRY_TYPE_FILE, 0);
     file_status_t *file_status = dvd_custom_status();
     if (file_status == NULL || file_status->result != 0) {
@@ -46,6 +51,16 @@ void load_stub() {
 
 __attribute__((aligned(32))) static DOLHEADER dol_hdr;
 static dol_info_t load_dol(uint64_t offset, uint8_t fd) {
+    // Belt and braces: bs2start() already disables the cache before its
+    // low-memory wipe, which is the path that actually gets here. But the BSS
+    // clear below writes wherever the DOL asks, which for a normal game or
+    // homebrew DOL routinely covers the cache's page buffer while its
+    // bookkeeping (patch region) survives -- the same corruption by another
+    // route, and load_dol_file() is reachable without going through bs2start().
+    // Reads from here on are big and sequential, so the cache was doing nothing
+    // for them anyway. See dvm_cache.h.
+    dvm_cache_disable();
+
     DOLHEADER *hdr = &dol_hdr;
     dvd_read(hdr, sizeof(DOLHEADER), offset, fd);
 
@@ -60,6 +75,17 @@ static dol_info_t load_dol(uint64_t offset, uint8_t fd) {
     for (int i = 0; i < MAXTEXTSECTION; i++) {
         if (hdr->textAddress[i] && hdr->textLength[i]) {
             dvd_read_data((void*)hdr->textAddress[i], hdr->textLength[i], offset + hdr->textOffset[i], fd);
+            // Make the freshly-loaded code coherent with what the CPU will
+            // fetch+execute after the handoff. DOL section addresses are 32B
+            // aligned but their file offsets are not 512-sector aligned, so the
+            // FatFs read serves each section's head/tail bytes via a window-
+            // buffer memcpy = CPU stores that sit DIRTY in dcache and never
+            // reach RAM. run() only does an icache invalidate, so without this
+            // the CPU would fetch those section-boundary bytes from stale RAM
+            // -> corrupt instructions -> instant crash before the loaded
+            // program runs. Flush dcache to RAM, then drop the icache lines.
+            DCFlushRange((void*)hdr->textAddress[i], hdr->textLength[i]);
+            ICInvalidateRange((void*)hdr->textAddress[i], hdr->textLength[i]);
         }
     }
 
@@ -67,6 +93,7 @@ static dol_info_t load_dol(uint64_t offset, uint8_t fd) {
     for (int i = 0; i < MAXDATASECTION; i++) {
         if (hdr->dataAddress[i] && hdr->dataLength[i]) {
             dvd_read_data((void*)hdr->dataAddress[i], hdr->dataLength[i], offset + hdr->dataOffset[i], fd);
+            DCFlushRange((void*)hdr->dataAddress[i], hdr->dataLength[i]);
         }
     }
 
@@ -378,6 +405,17 @@ void chainload_boot_game(gm_file_entry_t *boot_entry, bool passthrough) {
 }
 
 void run(register void* entry_point) {
+    // cubeboot's gcode driver polls the DI bus and leaves its transfer-complete
+    // interrupt latched (DI_SR bit4) and unacknowledged. Swiss drives the GC
+    // Loader through libogc's INTERRUPT-driven DVD subsystem, so when it enables
+    // interrupts during init that stale DI IRQ fires spuriously and derails the
+    // DVD state machine -> black-screen hang. (The EXI SD path reads via PIO and
+    // never touches DI interrupts, which is why it was unaffected; and standalone
+    // Swiss works because nothing issued gcode before it.) Acknowledge all DI
+    // interrupt status bits and leave them masked so the handoff target starts
+    // from a clean DI state.
+    *(volatile u32*)0xCC006000 = (1 << 6) | (1 << 4) | (1 << 2); // ack BRKINT|TCINT|DEINT, masks=0
+
     // ICFlashInvalidate
     asm("mfhid0	4");
     asm("ori 4, 4, 0x0800");

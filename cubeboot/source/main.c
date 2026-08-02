@@ -166,6 +166,22 @@ int main(int argc, char **argv) {
 
     iprintf("force_passthrough = %d\n", force_passthrough);
 
+    // COLD ODE-boot settle. When the GC Loader boots cubiboot.iso directly, its
+    // DI interface is not ready the instant the disc apploader hands control to
+    // us: BS2 just finished using the DI to read the disc image, and the GC
+    // Loader needs a brief moment before it answers our SD reads again. Our very
+    // first read (config below, then the IPL) would otherwise fail, leaving us
+    // unable to patch/boot -> stock animation then black screen. Poll the first
+    // read until the GC Loader responds (or time out) so everything afterward
+    // sees a ready device. Warm boots (e.g. launched from Swiss, which already
+    // set the GC Loader up) succeed on the first try and never wait. This is
+    // the real fix for the issue that enabling gecko prints accidentally hid by
+    // adding delay here.
+    for (int i = 0; i < 60; i++) {
+        if (get_file_size("/config.ini") != SD_FAIL) break;
+        usleep(10 * 1000); // 10ms; up to ~600ms total
+    }
+
     // setup settings
     iprintf("Loading settings\n");
     load_settings();
@@ -184,6 +200,43 @@ int main(int argc, char **argv) {
     if (current_bios->version == IPL_NTSC_10) {
         settings.progressive_enabled = FALSE;
     }
+
+    // Boot animation. The disc apploader already suppresses the console's stock
+    // IPL animation unconditionally, so the only animation left is cubeboot's own
+    // branded one -- and this is what decides whether it plays.
+    //
+    // The only control is the SRAM "System Boot Mode" bit (sram->ntd bit 7): the
+    // same bit the apploader's skip_ipl_animation() tests, and the one Swiss
+    // exposes as Settings -> "System Boot Mode".
+    //   SYS_BOOT_DEVELOPMENT (0x00, Swiss "Default")    -> skip, straight to menu
+    //   SYS_BOOT_PRODUCTION  (0x80, Swiss "Production") -> play the animation
+    // matching Swiss's own tooltip ("on retail hardware with GC Loader or
+    // PicoLoader, the default skips the GameCube logo screen"). It lives in SRAM,
+    // so setting it once in Swiss holds across power cycles.
+    // Fail safe: the DEFAULT is to play the animation. We only skip on a
+    // positive, verified "Development".
+    //
+    // This matters because SYS_GetBootMode() masks with 0x80, so it can only ever
+    // return 0x00 or 0x80 -- there is no third value that could signal "invalid".
+    // A dead RTC battery, a cleared SRAM or a garbage read all surface as 0x00,
+    // which is indistinguishable from a genuine Development setting. Testing
+    // `!= SYS_BOOT_PRODUCTION` would therefore treat every one of those as
+    // "skip", silently losing the animation on a console whose SRAM is simply
+    // unreadable. __SYS_CheckSram() verifies the block checksum first, and the
+    // test below is a positive one against SYS_BOOT_DEVELOPMENT.
+    u32 sram_valid = __SYS_CheckSram();
+    u32 sram_boot_mode = SYS_GetBootMode();
+    u32 skip_boot_animation = (sram_valid && sram_boot_mode == SYS_BOOT_DEVELOPMENT);
+    iprintf("boot animation: sram=%02x valid=%u (%s) -> skip=%u\n", sram_boot_mode, sram_valid,
+            sram_boot_mode == SYS_BOOT_PRODUCTION ? "production" : "development",
+            skip_boot_animation);
+
+    // The suppression itself happens inside the IPL, from bs2tick() in
+    // patches/source/main.c -- it has to, because the drawing must be disabled
+    // only for the splash and restored before the menu draws its own background
+    // cubes. See the comment there. (Forcing the IPL's "is A held?" check from
+    // out here was tried and had no effect: gecko showed skip=1 and the
+    // animation played anyway.)
 
 //// elf world pt2
 
@@ -303,18 +356,24 @@ int main(int argc, char **argv) {
     set_patch_value(symshdr, syment, symstringdata, "force_progressive", settings.progressive_enabled);
     set_patch_value(symshdr, syment, symstringdata, "force_swiss_boot", settings.force_swiss_default);
 
+    set_patch_value(symshdr, syment, symstringdata, "skip_boot_animation", skip_boot_animation);
+
     set_patch_value(symshdr, syment, symstringdata, "disable_mcp_select", settings.disable_mcp_select);
     set_patch_value(symshdr, syment, symstringdata, "show_watermark", settings.show_watermark);
 
     set_patch_value(symshdr, syment, symstringdata, "preboot_delay_ms", settings.preboot_delay_ms);
     set_patch_value(symshdr, syment, symstringdata, "postboot_delay_ms", settings.postboot_delay_ms);
 
-    // // Copy settings string
-    // void *cube_logo_ptr = (void*)get_symbol_value(symshdr, syment, symstringdata, "cube_logo_path");
-    // if (cube_logo_ptr != NULL && settings.cube_logo != NULL) {
-    //     iprintf("Copying cube_logo_path: %p\n", cube_logo_ptr);
-    //     strcpy(cube_logo_ptr, settings.cube_logo);
-    // }
+    // Copy the cube_logo path string into the patch's cube_logo_path[MAX_FILE_NAME]
+    // buffer. get_symbol_value() returns the symbol's runtime address in the
+    // already-relocated patch .data, so we can write straight into it. Bounded
+    // to MAX_FILE_NAME-1 (256) with explicit null-termination.
+    char *cube_logo_ptr = (char*)get_symbol_value(symshdr, syment, symstringdata, "cube_logo_path");
+    if (cube_logo_ptr != NULL && settings.cube_logo != NULL) {
+        iprintf("Copying cube_logo_path (%s) to %p\n", settings.cube_logo, cube_logo_ptr);
+        strncpy(cube_logo_ptr, settings.cube_logo, 255);
+        cube_logo_ptr[255] = '\0';
+    }
 
     // Copy other variables
     set_patch_value(symshdr, syment, symstringdata, "is_running_dolphin", is_running_dolphin);

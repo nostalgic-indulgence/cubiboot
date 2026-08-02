@@ -35,7 +35,7 @@ endif
 # options for code generation
 #---------------------------------------------------------------------------------
 
-CFLAGS		= -O2 -Wall -Wno-main -ffixed-r12 -ffixed-r13 -ffunction-sections -fdata-sections -Wno-unused-function -Werror-implicit-function-declaration -DIPL_CODE $(MACHDEP) $(INCLUDE)
+CFLAGS		= -O2 -Wall -Wno-main -ffixed-r12 -ffixed-r13 -ffunction-sections -fdata-sections -Wno-unused-function -Werror-implicit-function-declaration -DIPL_CODE -DGECKO_PRINT_ENABLE $(MACHDEP) $(INCLUDE)
 CXXFLAGS	= $(CFLAGS)
 
 LINKER_SCRIPTS	:=

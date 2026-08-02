@@ -281,7 +281,11 @@
 */
 
 
-#define FF_FS_LOCK		1024
+/* Disabled: flippy_emu.c keeps exactly one static FIL and one static FFDIR and
+/  closes both on every open, so nothing here can ever hold two objects open at
+/  once. At 1024 this cost a 12 KB static Files[] table that chk_lock() and
+/  inc_lock() scanned linearly on every single open and close. */
+#define FF_FS_LOCK		0
 /* The option FF_FS_LOCK switches file lock function to control duplicated file open
 /  and illegal operation to open objects. This option must be 0 when FF_FS_READONLY
 /  is 1.

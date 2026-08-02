@@ -83,8 +83,10 @@ static bnr_info_t get_banner_offset_slow(DiskHeader *header, uint32_t fd) {
 }
 
 // Get the BNR offset on the disc
-dolphin_game_into_t get_game_info(char *game_path) {
+dolphin_game_into_t get_game_info(char *game_path, int *out_fd) {
     __attribute__((aligned(32))) static u32 small_buf[8]; // for BNR reads
+
+    if (out_fd != NULL) *out_fd = -1;
 
     const uint8_t flags = IPC_FILE_FLAG_DISABLECACHE | IPC_FILE_FLAG_DISABLESPEEDEMU;
     int ret = dvd_custom_open(game_path, FILE_ENTRY_TYPE_FILE, flags);
@@ -129,7 +131,12 @@ dolphin_game_into_t get_game_info(char *game_path) {
             info.fst_size = header.FSTSize;
             info.max_fst_size = header.MaxFSTSize;
 
-            dvd_custom_close(status->fd);
+            // Hand the still-open file to the caller if it asked for it.
+            if (out_fd != NULL) {
+                *out_fd = status->fd;
+            } else {
+                dvd_custom_close(status->fd);
+            }
             return info;
         }
     }
@@ -161,7 +168,12 @@ dolphin_game_into_t get_game_info(char *game_path) {
             info.fst_size = header.FSTSize;
             info.max_fst_size = header.MaxFSTSize;
 
-            dvd_custom_close(status->fd);
+            // Hand the still-open file to the caller if it asked for it.
+            if (out_fd != NULL) {
+                *out_fd = status->fd;
+            } else {
+                dvd_custom_close(status->fd);
+            }
             return info;
         }
     }

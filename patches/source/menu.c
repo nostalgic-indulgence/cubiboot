@@ -528,6 +528,30 @@ __attribute_used__ void custom_gameselect_menu(u8 broken_alpha_0, u8 alpha_1, u8
 
     // text
     draw_text("cubiboot loader", 20, 20, 4, &white);
+
+    // Device the menu mounted from, shown on the line just below the title,
+    // e.g. "(SD-A)" / "(GCLDR)" / "(IDE-EXI SP1)". Kept on its own line because
+    // draw_text centre-anchors each string: folding the device into the title
+    // makes the combined string slide left off-screen (clipping the 'C') as the
+    // name grows. A separate string re-centres independently and always fits.
+    const char *dev = emu_get_device();
+    const char *dev_label = NULL;
+    if (dev != NULL) {
+        if      (strcmp(dev, "gcldr") == 0) dev_label = "GCLDR";
+        else if (strcmp(dev, "sda")  == 0) dev_label = "SD-A";
+        else if (strcmp(dev, "sdb")  == 0) dev_label = "SD-B";
+        else if (strcmp(dev, "sdc")  == 0) dev_label = "SD2SP2";
+        else if (strcmp(dev, "ataa") == 0) dev_label = "IDE-EXI A";
+        else if (strcmp(dev, "atab") == 0) dev_label = "IDE-EXI B";
+        else if (strcmp(dev, "atac") == 0) dev_label = "IDE-EXI SP1";
+        else                               dev_label = dev;
+    }
+    if (dev_label != NULL) {
+        static char loader_dev_text[32];
+        sprintf(loader_dev_text, "(%s)", dev_label);
+        draw_text(loader_dev_text, 20, 20, 34, &white);
+    }
+
     draw_text("Load Disc (Z)", 20, 320, 4, &white);
 
     // icons

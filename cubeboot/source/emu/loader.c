@@ -93,7 +93,7 @@ void chainload_swiss_game(char* game_path, bool passthrough) {
     const char* arg_list[] = {
         "swiss-gc.dol",
         autoload_arg,
-        "AutoBoot=Yes"
+        "AutoBoot=Yes",
         "BS2Boot=No",
         "Prefer Clean Boot=No",
         igr_type,

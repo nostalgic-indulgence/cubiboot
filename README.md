@@ -34,7 +34,6 @@ ODEs besides PicoLoader are not supported, and issues specific to these devices 
 
 ## Known Bugs
 - loading of files is very slow when using FAT32
-- cube_logo option does not work
 - button_* options to not work (use gekkoboot for this functionality instead)
 - no PicoBoot uf2
 

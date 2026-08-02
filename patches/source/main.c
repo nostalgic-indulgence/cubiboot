@@ -18,6 +18,8 @@
 #include "flippy_sync.h"
 #include "gc_dvd.h"
 #include "games.h"
+#include "upng.h"
+#include "metaphrasis.h"
 
 #include "video.h"
 #include "dol.h"
@@ -42,6 +44,10 @@
 
 __attribute_data__ u32 cube_color = 0;
 __attribute_data__ u32 start_passthrough_game = 0;
+
+// Set by cubeboot.dol from the SRAM "System Boot Mode" bit (Swiss: Settings ->
+// System Boot Mode). Non-zero = don't show the branded boot animation.
+__attribute_data__ u32 skip_boot_animation = 0;
 
 __attribute_data__ static u8 *cube_text_tex = NULL;
 __attribute_data__ char cube_logo_path[MAX_FILE_NAME] = {0};
@@ -228,7 +234,6 @@ __attribute_used__ void mod_cube_colors() {
     return;
 }
 
-#if 0
 __attribute_aligned_data_lowmem__ static u8 color_image_buffer[GAMECUBE_LOGO_WIDTH * GAMECUBE_LOGO_HEIGHT * 4];
 static void load_cube_logo(const char *path) {
     if (path == NULL || strlen(path) == 0) {
@@ -238,7 +243,9 @@ static void load_cube_logo(const char *path) {
 
     OSReport("Loading cube logo: %s\n", path);
 
-    // load the icon
+    // No retry loop here on purpose: what fails on an EXI SD is the underlying
+    // mount, and flippy_emu_mount() now does the settle-retry itself. Retrying
+    // the open on top of that would just multiply the delays.
     dvd_custom_open(path, FILE_ENTRY_TYPE_FILE, IPC_FILE_FLAG_DISABLECACHE | IPC_FILE_FLAG_DISABLEFASTSEEK);
     file_status_t *status = dvd_custom_status();
     if (status == NULL || status->result != 0) {
@@ -251,6 +258,11 @@ static void load_cube_logo(const char *path) {
     file_size += 31;
     file_size &= 0xffffffe0;
     void *file_buf = gm_memalign(file_size, 32);
+    if (file_buf == NULL) {
+        OSReport("ERROR: could not allocate cube logo buffer (%u bytes)\n", file_size);
+        dvd_custom_close(status->fd);
+        return;
+    }
 
     // read
     dvd_read(file_buf, file_size, 0, status->fd);
@@ -259,19 +271,22 @@ static void load_cube_logo(const char *path) {
     upng_t *img = upng_new_from_bytes(file_buf, file_size);
     if (img == NULL) {
         OSReport("ERROR: could not allocate png\n");
-        goto cleanup;
+        gm_freealign(file_buf);
+        return;
     }
 
     upng_error png_err = upng_decode(img);
     if (png_err != UPNG_EOK) {
-        OSReport("ERROR: could not decode icon file (%d)\n", png_err);
+        OSReport("ERROR: could not decode cube logo (%d)\n", png_err);
         goto cleanup;
     }
 
     // upng_get_format
     upng_format png_format = upng_get_format(img);
     if (png_format != UPNG_RGBA8) {
-        OSReport("ERROR: invalid png format (%d)\n", png_format);
+        // upng only accepts true-color 8-bit; indexed/palette PNGs land here.
+        // Re-export the logo as 32-bit RGBA (with alpha) to fix this.
+        OSReport("ERROR: cube logo must be 32-bit RGBA PNG (format=%d)\n", png_format);
         goto cleanup;
     }
 
@@ -288,12 +303,14 @@ static void load_cube_logo(const char *path) {
     Metaphrasis_convertBufferToRGBA8((uint32_t*)upng_get_buffer(img), (uint32_t*)color_image_buffer, png_width, png_height);
     DCFlushRange(color_image_buffer, sizeof(color_image_buffer));
 
+    OSReport("Cube logo loaded (%dx%d)\n", png_width, png_height);
     cube_text_tex = color_image_buffer;
 cleanup:
-    gm_freealign(file_buf);
+    // img is non-NULL here (the alloc-failure path returns early above);
+    // upng_free() releases the decoded buffer and the struct itself.
     upng_free(img);
+    gm_freealign(file_buf);
 }
-#endif
 
 __attribute_used__ void mod_cube_text() {
         tex_data *gc_text_tex = gc_text_model->data->tex->dat;
@@ -353,9 +370,10 @@ __attribute_used__ void pre_thread_init() {
 
     gm_init_heap();
     gm_init_thread();
-    if (!start_passthrough_game) {
-        gm_start_thread("/");
-    }
+
+    // The boot-logo load and the game-enumeration thread both moved to
+    // pre_menu_init(). This function replaces the IPL's *thread init* call, so
+    // it runs before the IPL has brought EXI up -- see the comment there.
 }
 
 __attribute_used__ void pre_menu_init(int unk) {
@@ -368,8 +386,32 @@ __attribute_used__ void pre_menu_init(int unk) {
     custom_gameselect_init();
 
     mod_cube_colors();
+
+    // Load the optional custom boot logo (cube_logo = *.png) HERE, not in
+    // pre_thread_init().
+    //
+    // pre_thread_init() replaces the IPL's thread-init call, which runs before
+    // the IPL has initialised EXI. An SD adapter in a memory-card slot is an EXI
+    // device, so the mount cannot succeed that early no matter how long we wait.
+    // A gecko trace of a PicoBoot + SD-slot-A boot made this unambiguous: 30
+    // mount retries over 300ms all failed there, and then the very next mount --
+    // once the IPL had moved on -- succeeded on its first attempt ("after 0
+    // retries"). The GCLoader lives on the DI bus, already up by then, which is
+    // why this only ever broke on the SD paths.
+    //
+    // By this point EXI is up. Loading here also keeps the emu layer's single
+    // shared FIL race-free, because the enumeration thread is not started until
+    // after the logo has been decoded -- that ordering was the original reason
+    // this lived in pre_thread_init().
+    load_cube_logo(cube_logo_path);
+
     mod_cube_text();
     mod_cube_anim();
+
+    // Start enumeration only now, so it cannot race the logo load above.
+    if (!start_passthrough_game) {
+        gm_start_thread("/");
+    }
 
     // delay before boot animation (to wait for GCVideo)
     const int fps = rmode->viTVMode >> 2 == VI_NTSC ? 60 : 50;
@@ -430,9 +472,61 @@ __attribute_used__ u32 get_tvmode() {
     return rmode->viTVMode;
 }
 
+// Boot-animation suppression, ported from the disc apploader's
+// hide_ipl_animation() -- the mechanism already proven on this hardware for the
+// console's stock animation.
+//
+// This has to suppress the *drawing*, because nothing inside the animation's own
+// state machine can stop it having visibly started: returning STATE_COVER_OPEN
+// leaves the finished logo held on screen, shortening cube_state's frame
+// counters just fast-forwards it so you catch the cube mid-jump, and forcing the
+// IPL's "is A held?" check had no effect at all.
+//
+// The three draw calls are swapped for `nop` and the sound level for 0, then all
+// four are swapped BACK once the splash is over. The restore is not optional:
+// draw_outer/draw_inner also render the menu's background cubes, so leaving them
+// NOPped would break the menu we are trying to reach.
+__attribute_data__ static bool anim_hidden = false;
+__attribute_data__ static u32 saved_draw_cubes = 0x60000000; // nop
+__attribute_data__ static u32 saved_draw_outer = 0x60000000; // nop
+__attribute_data__ static u32 saved_draw_inner = 0x60000000; // nop
+__attribute_data__ static u32 saved_sound_level = 0;
+
+static void swap_word(u32 *addr, u32 *slot) {
+    u32 tmp = *addr;
+    *addr = *slot;
+    *slot = tmp;
+    DCFlushRange(addr, 4);
+    ICInvalidateRange(addr, 4);
+}
+
+static void set_anim_hidden(bool hide) {
+    if (hide == anim_hidden) return;
+
+    swap_word(anim_sound_level, &saved_sound_level);
+    swap_word(anim_draw_cubes, &saved_draw_cubes);
+    swap_word(anim_draw_outer, &saved_draw_outer);
+    swap_word(anim_draw_inner, &saved_draw_inner);
+
+    anim_hidden = hide;
+}
+
 __attribute_data__ int frame_count = 0;
 __attribute_used__ u32 bs2tick() {
     frame_count++;
+
+    if (skip_boot_animation) {
+        // *main_menu_id is what the apploader calls splash_state: 1 while the
+        // boot splash is running. Hide the animation for exactly that window,
+        // and put the IPL back the way we found it the moment it ends.
+        if (*main_menu_id == 1) {
+            set_anim_hidden(true);
+            cube_state->cube_anim_done = 1; // end the splash immediately
+        } else {
+            set_anim_hidden(false);
+        }
+    }
+
     if (!completed_time && cube_state->cube_anim_done) {
         OSReport("FINISHED (%d frames)\n", frame_count);
         completed_time = gettime();
@@ -455,11 +549,6 @@ __attribute_used__ u32 bs2tick() {
         return STATE_START_GAME;
     }
 
-#ifdef TEST_SKIP_ANIMATION
-    return STATE_COVER_OPEN;
-#endif
-
-    // TODO: allow the user to decide if they want to logo to play
     return STATE_NO_DISC;
 }
 
@@ -502,6 +591,11 @@ __attribute_used__ void bs2start() {
     extern void tsd_set_native(bool native);
     tsd_set_native(true);
 
+    // IDE-EXI (ata) must also switch to raw-register EXI before the IPL (and its
+    // EXI driver) is wiped below, so launching a game off an IDE-EXI drive works.
+    extern void ata_set_native(bool native);
+    ata_set_native(true);
+
     while (!PADSync());
     OSDisableInterrupts();
     __OSStopAudioSystem();
@@ -509,6 +603,19 @@ __attribute_used__ void bs2start() {
     u32 start_addr = 0x80100000;
     u32 end_addr = 0x81600000;
     u32 len = end_addr - start_addr;
+
+    // This wipe covers all of .data_lowmem, which is where the storage block
+    // cache keeps its 384 KiB of pages -- but NOT its bookkeeping, which is a
+    // .bss object up in the patch region and survives. Leave it enabled and
+    // every read the loader makes below is served out of a page the memset just
+    // zeroed, while the cache happily reports a hit: nothing boots, on any
+    // device. (FatFs' own window buffer is fine here only because it lives in
+    // the same surviving region as the FATFS struct that indexes it.)
+    //
+    // Turn the cache off before the wipe, not after -- there must be no window
+    // in which the metadata and the pages disagree. It exists to speed up
+    // browsing, and browsing is over.
+    dvm_cache_disable();
 
     memset((void*)start_addr, 0, len); // cleanup
     DCFlushRange((void*)start_addr, len);

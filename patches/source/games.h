@@ -107,6 +107,10 @@ extern char game_enum_path[];
 extern gm_file_entry_t boot_entry;
 extern gm_file_entry_t second_boot_entry;
 
+// pmalloc-backed allocation shims (defined in games.c) for the cube-logo loader
+void *gm_memalign(u32 size, u32 align);
+void gm_freealign(void *ptr);
+
 void gm_init_heap();
 void gm_init_thread();
 void gm_deinit_thread();

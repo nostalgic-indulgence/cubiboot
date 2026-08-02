@@ -1,52 +1,202 @@
-name: CI
-on: push
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create Releases on tag pushes
+  packages: write   # cache the toolchain image in GHCR (see "Toolchain image")
+
+# A newer push to the same branch supersedes an in-flight build. Tags are never
+# cancelled (each tag is its own group), so a release build always completes.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    container: devkitpro/devkitppc:20231110
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
-      - name: Setup
+        uses: actions/checkout@v4
+
+      # The dev image compiles libogc2 + libfat from source, which costs ~10 min
+      # on a cold runner. Nothing in it depends on repo sources, so it is cached
+      # in GHCR under a tag derived from the Dockerfile hash: edit .ci/Dockerfile
+      # and the tag changes and it rebuilds; otherwise every run just pulls it.
+      # A pull or push failure (GHCR disabled/unreachable, fork without package
+      # permissions) is not fatal -- the image is built locally instead.
+      - name: Toolchain image
+        env:
+          REGISTRY: ghcr.io
         run: |
-          apt-get update && apt-get install -y genisoimage git golang nodejs build-essential gcc-arm-none-eabi python3-distutils python3-setuptools
-          curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py && python3 get-pip.py
-          pip3 install -r patches/scripts/requirements.txt
-      - name: Build libogc2
+          set -euo pipefail
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="$REGISTRY/$OWNER/cubiboot-dev:${{ hashFiles('.ci/Dockerfile') }}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin || true
+
+          if docker pull -q "$IMAGE" 2>/dev/null; then
+            docker tag "$IMAGE" cubiboot-dev
+            echo "::notice::reused cached toolchain image $IMAGE"
+            exit 0
+          fi
+
+          # Cache miss. Retry the build: the Docker Hub base-image pull and the
+          # libogc2/libfat clones can hit transient timeouts on runners.
+          echo "::notice::toolchain cache miss, building $IMAGE"
+          for i in 1 2 3 4 5; do
+            if docker build -t cubiboot-dev - < .ci/Dockerfile; then
+              docker tag cubiboot-dev "$IMAGE"
+              docker push "$IMAGE" || echo "::warning::could not push $IMAGE; next run rebuilds"
+              exit 0
+            fi
+            echo "docker build attempt $i failed; retrying in 20s..." >&2
+            sleep 20
+          done
+          echo "docker build failed after 5 attempts" >&2
+          exit 1
+
+      # ipl.dol: the cubeboot loader. entry/ copies cubeboot/source/emu into
+      # patches/, builds patches -> cubeboot -> the gzip self-extractor, so this
+      # one step compiles every C source in the repo.
+      - name: Build ipl.dol
+        run: docker run --rm -v "$PWD":/work cubiboot-dev bash -lc 'cd entry && make clean && make'
+
+      # apploader.img: Swiss In-Game-Reset redirect embedding the freshly built loader.
+      - name: Build apploader.img
+        run: docker run --rm -v "$PWD":/work cubiboot-dev bash -lc 'bash /work/.ci/build_apploader.sh'
+
+      # gbi.hdr: rebuild the disc apploader at -O1 (GCC 13 miscompiles the 2006
+      # apploader at -O2 -> green screen) with the IPL animation hide+skip enabled
+      # (PATCH_IPL=3 + IGNORE_BOOT_MODE=1), and regenerate gbi.hdr into the repo
+      # root. Must run before build_iso.sh, which consumes <repo>/gbi.hdr.
+      - name: Rebuild disc apploader + gbi.hdr
+        run: docker run --rm -v "$PWD":/work cubiboot-dev bash -lc 'bash /work/.ci/build_disc_apploader.sh'
+
+      # cubiboot.iso: bootable GameCube disc image for GC Loader (and other ODEs).
+      - name: Build cubiboot.iso
+        run: docker run --rm -v "$PWD":/work cubiboot-dev bash -lc 'bash /work/.ci/build_iso.sh'
+
+      - name: Assemble release files
         run: |
-          git clone https://github.com/extremscorner/libogc2.git
-          (cd libogc2; make install)
-      - name: Build libfat
+          set -euo pipefail
+          mkdir -p dist/swiss/patches
+          cp cubeboot/cubeboot.dol dist/ipl.dol
+          cp apploader.img         dist/swiss/patches/apploader.img
+          cp cubiboot.iso          dist/cubiboot.iso
+          # Vanilla config.ini (only keys stock cubiboot parses).
+          cat > dist/config.ini <<'INI'
+          [cubeboot]
+
+          ; Boot a specific program by default, relative to the SD card root.
+          ; default_program = /swiss.dol
+
+          ; Delay (ms) before the boot animation begins (e.g. to let your TV sync).
+          ; preboot_delay_ms = 500
+
+          ; Delay (ms) after the animation finishes.
+          ; postboot_delay_ms = 0
+          INI
+          # Guard: config.ini must not reference an asset the zip does not ship.
+          # A cube_logo pointing at a file that never lands on the SD card fails
+          # silently at boot (you just get the stock wordmark), which is painful
+          # to diagnose on a console. Fail the build instead.
+          EXTRA=""
+          LOGO=$(sed -n 's/^[[:space:]]*cube_logo[[:space:]]*=[[:space:]]*\/\?\(.*[^[:space:]]\)[[:space:]]*$/\1/p' dist/config.ini | tail -1)
+          if [ -n "$LOGO" ]; then
+            if [ ! -f "dist/$LOGO" ]; then
+              echo "ERROR: dist/config.ini sets cube_logo=$LOGO but dist/$LOGO does not exist," >&2
+              echo "       so it would not be packaged and the logo would silently not load." >&2
+              exit 1
+            fi
+            EXTRA="$LOGO"
+          fi
+          # EXTRACT_TO_ROOT.zip: copy straight to the SD card root. Remove any
+          # stale archive first -- `zip` ADDS to an existing file rather than
+          # replacing it, so a leftover zip would ship files from an older build.
+          rm -f EXTRACT_TO_ROOT.zip dist/EXTRACT_TO_ROOT.zip
+          (cd dist && zip -r ../EXTRACT_TO_ROOT.zip ipl.dol config.ini swiss $EXTRA)
+          cp EXTRACT_TO_ROOT.zip dist/EXTRACT_TO_ROOT.zip
+          unzip -l EXTRACT_TO_ROOT.zip
+
+      # cubiboot_picoloader.uf2: PicoLoader firmware with cubiboot.iso embedded.
+      - name: Build cubiboot_picoloader.uf2
         run: |
-          git clone https://github.com/extremscorner/libfat.git
-          (cd libfat; sed -i '/rice/d' Makefile; make ogc-install)
-      - name: Build cubeboot
-        run: cd entry; make clean && make
-      # - name: Build apploader
-      #   run: |
-      #     git clone -b force-early-boot --single-branch https://github.com/OffBroadway/gc-boot-tools.git
-      #     cd gc-boot-tools
-      #     (cd ppc/apploader; make)
-      #     (cd mkgbi; make)
-      #     ls mkgbi/gbi.hdr
-      # - name: Build GCLoader
-      #   run: |
-      #     mkdir boot-dir && cp cubeboot/cubeboot.dol boot-dir
-      #     genisoimage -R -J -G gc-boot-tools/mkgbi/gbi.hdr -no-emul-boot -b cubeboot.dol -o boot.iso boot-dir
-      # - name: Build PicoBoot
-      #   run: |
-      #     git clone https://github.com/webhdx/PicoBoot.git
-      #     cd PicoBoot; env PICO_SDK_FETCH_FROM_GIT=1 cmake .
-      #     ./process_ipl.py ../entry/entry.dol src/ipl.h
-      #     make
-      - name: Rename Artifacts
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 5 -o picoloader.uf2 https://makeo.github.io/PicoLoader/fw/picoloader.uf2
+          python3 .ci/make_picoloader_uf2.py picoloader.uf2 dist/cubiboot.iso dist/cubiboot_picoloader.uf2
+
+      # PicoBoot (webhdx) .uf2s -- the IPL-replacement modchip, a different product
+      # from PicoLoader above. Payload is entry/entry.dol (linked at 0x81300000);
+      # cubeboot.dol would be rejected. Needs network for the PicoBoot tools/release.
+      - name: Build PicoBoot .uf2 files
+        run: docker run --rm -v "$PWD":/work cubiboot-dev bash -lc 'bash /work/.ci/build_picoboot_uf2.sh'
+
+      # Every artifact must exist and be non-empty before we call the build green:
+      # build_picoboot_uf2.sh deliberately downgrades a failed PicoBoot release
+      # fetch to a warning, so a missing full image would otherwise ship silently
+      # as a partial upload.
+      - name: Verify artifacts
         run: |
-          mkdir -p dist/next
-          # mv ./boot.iso dist/next/boot.iso
-          mv ./cubeboot/cubeboot.dol dist/next/cubeboot.dol
-          # mv ./PicoBoot/picoboot.uf2 dist/next/cubeboot.uf2
-      - name: Archive
-        uses: actions/upload-artifact@v3
+          set -euo pipefail
+          MISSING=0
+          for f in dist/ipl.dol dist/swiss/patches/apploader.img dist/config.ini \
+                   dist/cubiboot.iso dist/cubiboot_picoloader.uf2 \
+                   dist/cubiboot_picoboot_payload.uf2 dist/cubiboot_picoboot_pico.uf2 \
+                   dist/cubiboot_picoboot_pico2.uf2 dist/EXTRACT_TO_ROOT.zip; do
+            if [ ! -s "$f" ]; then
+              echo "ERROR: missing or empty artifact: $f" >&2
+              MISSING=1
+            fi
+          done
+          [ "$MISSING" -eq 0 ] || exit 1
+
+          {
+            echo "### cubiboot artifacts (\`${GITHUB_SHA:0:7}\`)"
+            echo
+            echo "| file | bytes | sha256 |"
+            echo "|---|---:|---|"
+            find dist -type f | sort | while read -r f; do
+              printf '| `%s` | %s | `%s` |\n' \
+                "${f#dist/}" "$(stat -c%s "$f")" "$(sha256sum "$f" | cut -c1-16)"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/next/
+          name: cubiboot-${{ github.sha }}
+          retention-days: 30
+          path: |
+            dist/ipl.dol
+            dist/swiss/patches/apploader.img
+            dist/config.ini
+            dist/cubiboot.iso
+            dist/cubiboot_picoloader.uf2
+            dist/cubiboot_picoboot_payload.uf2
+            dist/cubiboot_picoboot_pico.uf2
+            dist/cubiboot_picoboot_pico2.uf2
+            dist/EXTRACT_TO_ROOT.zip
+
+      # On a tag push (v*), publish a GitHub Release with the artifacts.
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/ipl.dol
+            dist/swiss/patches/apploader.img
+            dist/config.ini
+            dist/cubiboot.iso
+            dist/cubiboot_picoloader.uf2
+            dist/cubiboot_picoboot_payload.uf2
+            dist/cubiboot_picoboot_pico.uf2
+            dist/cubiboot_picoboot_pico2.uf2
+            dist/EXTRACT_TO_ROOT.zip
