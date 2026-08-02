@@ -36,6 +36,24 @@ SP1, with the same EXI mapping Swiss uses.
 > The IDE-EXI and GC Loader read paths have been validated on hardware, but not
 > in every adapter/drive combination.
 
+### Block cache
+An LRU block cache sits between FatFs and the storage drivers, so repeated reads
+of the same areas — directory entries and FAT chains, which get walked over and
+over while the game list is built — are served from RAM instead of the device. It
+is ported from [libdvm](https://github.com/extremscorner/libdvm) and applies to
+every device in the table above.
+
+It is sized differently on each side of the boot:
+
+| Build | Cache | Why |
+|-------|-------|-----|
+| Menu (IPL) | 384 KiB | Enumerates games and reads banners/icons — the work that benefits. |
+| `cubeboot.dol` | 64 KiB | Only probes for a device and reads `config.ini` and the boot logo. |
+
+Pages are 2 KiB (4 sectors), which reads ahead usefully because directory scans
+and FAT chain walks are sequential. This does not change the exFAT-vs-FAT32
+advice above — FAT32 is slow for reasons the cache cannot fix.
+
 ## Installation - [PicoLoader](https://github.com/makeo/PicoLoader)
 1. Download the [```cubiboot_picoloader.uf2```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot_picoloader.uf2) file
 2. Hold down the button on the RP Pico whilst plugging it into your PC
@@ -143,4 +161,5 @@ that base image, so don't bump it without testing.
 - [cubeboot](https://github.com/OffBroadway/cubeboot) (GPL-2.0)
 - [apploader](https://github.com/makeo/cubeboot-tools) (GPL-2.0)
 - [packer](https://github.com/emukidid/swiss-gc/tree/master/cube/packer) for apploader.img (GPL-2.0)
+- [libdvm](https://github.com/extremscorner/libdvm) for the block cache (ZPL-2.1, Copyright fincs/devkitPro)
 - For more, see [CREDIT.md](https://github.com/makeo/cubiboot/blob/main/CREDIT.md)
