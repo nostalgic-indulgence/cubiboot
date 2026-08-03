@@ -19,8 +19,9 @@ bool emu_can_boot(gm_file_type_t type);
 void emu_draw_boot_error(gm_file_type_t type, u8 ui_alpha);
 bool emu_has_dvd();
 
-bool bnr_cache_get(u8 game_id[6], BNR* bnr);
-void bnr_cache_put(u8 game_id[6], BNR* bnr);
+// Keyed per FILE (see gm_bnr_cache_key() in games.c), not per game ID.
+bool bnr_cache_get(u32 key, BNR* bnr);
+void bnr_cache_put(u32 key, BNR* bnr);
 
 #else
 void ensure_ipl_loaded(uint8_t* bios_buffer);

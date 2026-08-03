@@ -113,8 +113,22 @@ void bnr_cache_load(BNR* bnr, u32 aram_offset) {
 
 #define BNR_CACHE_SIZE 1024
 
+// Keyed on `key`, a hash of the file's full path (gm_bnr_cache_key() in games.c).
+//
+// This used to be keyed on the 6-byte game ID instead, which is NOT unique per
+// file: every build of cubiboot.iso is "GBLPGL", and homebrew ISOs in general
+// reuse a handful of generic IDs. gm_warm_files() walks the whole card populating
+// this cache first-seen-wins, and gm_load_banner() checks it before reading the
+// file -- so one stale copy of a game anywhere on the card handed its banner to
+// every other file sharing that ID. The tell was a banner whose desc text looked
+// right while the image was wrong or blank: the text is memcpy'd from RAM but the
+// pixels come back through ARAM, so both came from the cached stranger.
+//
+// The path hash means two copies of the same game now take two slots rather than
+// sharing one. That is the intended trade: 1024 slots wrap, and a duplicate
+// costing ARAM is much cheaper than a duplicate showing the wrong art.
 typedef struct {
-    u8 game_id[6];
+    u32 key;
     u32 aram_offset;
     bool valid;
 } bnr_cache_entry_t;
@@ -122,31 +136,31 @@ typedef struct {
 static bnr_cache_entry_t bnr_cache[BNR_CACHE_SIZE] = {0};
 static u32 bnr_cache_next_index = 0;
 
-bool bnr_cache_get(u8 game_id[6], BNR* bnr) {
+bool bnr_cache_get(u32 key, BNR* bnr) {
     for (int i = 0; i < BNR_CACHE_SIZE; i++) {
-        if (bnr_cache[i].valid && memcmp(bnr_cache[i].game_id, game_id, 6) == 0) {
+        if (bnr_cache[i].valid && bnr_cache[i].key == key) {
             bnr_cache_load(bnr, bnr_cache[i].aram_offset);
             return true;
         }
     }
-    
+
     return false;
 }
 
-void bnr_cache_put(u8 game_id[6], BNR* bnr) {
+void bnr_cache_put(u32 key, BNR* bnr) {
     for (int i = 0; i < BNR_CACHE_SIZE; i++) {
-        if (bnr_cache[i].valid && memcmp(bnr_cache[i].game_id, game_id, 6) == 0) {
+        if (bnr_cache[i].valid && bnr_cache[i].key == key) {
             return;
         }
     }
 
     bnr_cache_entry_t* entry = &bnr_cache[bnr_cache_next_index];
     entry->valid = false;
-    memcpy(entry->game_id, game_id, 6);
+    entry->key = key;
     entry->aram_offset = (16 * 1024 * 1024) - (sizeof(BNR) * (bnr_cache_next_index + 1));
     bnr_cache_store(bnr, entry->aram_offset);
     entry->valid = true;
-    
+
     bnr_cache_next_index = (bnr_cache_next_index + 1) % BNR_CACHE_SIZE;
 }
 

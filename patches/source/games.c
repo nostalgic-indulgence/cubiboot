@@ -19,6 +19,7 @@
 #include "picolibc.h"
 #include "reloc.h"
 #include "attr.h"
+#include "crc32.h"
 
 #include "dolphin_os.h"
 #include "dolphin_arq.h"
@@ -615,6 +616,14 @@ void gm_sort_files(int path_count) {
 // one at a time, so a second buffer would just be 8 KB of lowmem wasted.
 __attribute_aligned_data_lowmem__ static BNR banner_buffer;
 
+// bnr_cache key. The full path is the only thing that actually identifies a file:
+// game IDs are not unique (every cubiboot.iso is "GBLPGL", and homebrew reuses a
+// small pool of generic IDs), and keying the cache on the ID made duplicates serve
+// each other's banner art. See the comment on bnr_cache_entry_t in emu/tweaks.c.
+static u32 gm_bnr_cache_key(const char *path) {
+    return tinf_crc32(path, strlen(path));
+}
+
 // returns amount of space used in aram
 //
 // open_fd is the descriptor get_game_info() left open on this same file, or -1
@@ -628,7 +637,8 @@ static int gm_load_banner(gm_file_entry_t *entry, u32 aram_offset, bool force_un
         return false;
     }
 
-    if (bnr_cache_get(entry->extra.game_id, &banner_buffer)) {
+    u32 bnr_key = gm_bnr_cache_key(entry->path);
+    if (bnr_cache_get(bnr_key, &banner_buffer)) {
         if (fd >= 0) dvd_custom_close(fd);
         goto cached;
     }
@@ -648,7 +658,7 @@ static int gm_load_banner(gm_file_entry_t *entry, u32 aram_offset, bool force_un
     dvd_threaded_read(&banner_buffer, sizeof(BNR), entry->extra.dvd_bnr_offset, fd);
     dvd_custom_close(fd);
 
-    bnr_cache_put(entry->extra.game_id, &banner_buffer);
+    bnr_cache_put(bnr_key, &banner_buffer);
     cached:
 
     entry->asset.banner.state = GM_LOAD_STATE_LOADING;
@@ -1029,14 +1039,15 @@ static bool gm_warm_files(int path_count) {
         if (!info.valid) continue; // get_game_info() closed it
 
         // Already cached (or nothing to cache) -- just let the file go.
-        if (info.bnr_offset == 0 || bnr_cache_get(info.game_id, &banner_buffer)) {
+        u32 bnr_key = gm_bnr_cache_key(entry->path);
+        if (info.bnr_offset == 0 || bnr_cache_get(bnr_key, &banner_buffer)) {
             if (fd >= 0) dvd_custom_close(fd);
             continue;
         }
 
         dvd_threaded_read(&banner_buffer, sizeof(BNR), info.bnr_offset, fd);
         dvd_custom_close(fd);
-        bnr_cache_put(info.game_id, &banner_buffer);
+        bnr_cache_put(bnr_key, &banner_buffer);
     }
 
     return true;
