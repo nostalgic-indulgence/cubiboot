@@ -25,11 +25,16 @@ trap 'rm -rf "$WORK"' EXIT
 [ -f "$REPO/cubeboot/cubeboot.dol" ] || { echo "ERROR: cubeboot/cubeboot.dol not built" >&2; exit 1; }
 [ -f "$GBI_HDR" ]                    || { echo "ERROR: gbi.hdr not found at $GBI_HDR -- run .ci/build_disc_apploader.sh first" >&2; exit 1; }
 
-# Re-brand the disc-intro banner baked into gbi.hdr: drop in the cubeboot banner
-# pixels from default_opening.bin and set the text to "Cubiboot" / "Games Loader",
-# replacing the stock gc-linux "Game Play" banner the BIOS would otherwise show.
+# Re-brand the disc-intro banner baked into gbi.hdr: drop in the cubeboot cube icon
+# and set the text to "Cubiboot" / "Games Loader", replacing the stock gc-linux
+# "Game Play" banner the BIOS would otherwise show.
+#
+# The source is dol_tex.bin (the 32x32 RGB5A3 loader icon), which brand_gbi.py
+# centres into the 96x32 banner. NOT default_opening.bin: that BNR1 is a blank
+# template -- the loader fills its pixelData at runtime, so on disc it is 6144 zero
+# bytes and produces an all-black banner (the bug this replaced).
 BRANDED_HDR="$WORK/gbi.cubiboot.hdr"
-python3 "$REPO/.ci/brand_gbi.py" "$GBI_HDR" "$REPO/patches/data/default_opening.bin" "$BRANDED_HDR"
+python3 "$REPO/.ci/brand_gbi.py" "$GBI_HDR" "$REPO/patches/data/dol_tex.bin" "$BRANDED_HDR"
 
 # Disc directory tree: the loader .dol is the El-Torito boot image.
 mkdir -p "$WORK/disc"

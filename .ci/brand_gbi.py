@@ -54,7 +54,15 @@ TILE_BYTES     = 32
 def build_banner(src: bytes) -> bytes:
     # Full opening.bnr (BNR1/BNR2): copy its 96x32 pixelData straight across.
     if src[0:3] == b"BNR" and len(src) >= BNR_PIXEL_OFF + PIXELDATA_LEN:
-        return src[BNR_PIXEL_OFF:BNR_PIXEL_OFF + PIXELDATA_LEN]
+        px = src[BNR_PIXEL_OFF:BNR_PIXEL_OFF + PIXELDATA_LEN]
+        # patches/data/default_opening.bin is a blank template -- the loader paints
+        # its pixels at runtime. Baked onto a disc it is an all-black banner, so
+        # refuse it rather than shipping an ISO with no visible banner.
+        if not any(px):
+            raise SystemExit(
+                "banner source has empty pixelData (blank BNR template) -- "
+                "pass a real banner, e.g. patches/data/dol_tex.bin")
+        return px
 
     # Otherwise treat it as a raw 32x32 RGB5A3 texture and centre it in the banner.
     if len(src) < LOGO_TILES_W * TILES_H * TILE_BYTES:
