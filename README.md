@@ -34,9 +34,8 @@ real FlippyDrive cubiboot talks to it directly again, which restores the things
 the emulation cannot do at all:
 
 - **The drive's internal flash.** `swiss-gc.dol`, `stub.bin` and
-  `apploader.img` are read from flash, exactly as on a stock FlippyDrive
-  install, falling back to the SD card when a file isn't in flash. On every
-  other device these live in a `/cubiboot` folder on the card instead.
+  `cubeboot.dol` are read from flash, exactly as on a stock FlippyDrive
+  install.
 - **Booting games through the drive.** The drive serves the selected ISO as if
   it were a disc, so games start without chainloading Swiss and without
   `swiss-gc.dol` being present at all. Set `force_swiss_boot` if you would
@@ -56,16 +55,17 @@ the firmware if the drive is sitting in its bootloader.
 > below it in the table.
 
 ### GC Loader SD card
-Booting `cubiboot.iso` from a GC Loader now reads your programs straight off the
-GC Loader's own SD card. Previously this needed a separate SD Gecko or SD2SP2 in
-a memory card slot; that still works and takes priority if present.
+Booting `cubiboot.iso` renamed to boot.iso from a GC Loader now reads your 
+programs straight off the GC Loader's own SD card. Previously this needed 
+a separate SD Gecko or SD2SP2 in a memory card slot; that still works and 
+takes priority if present.
 
-### IDE-EXI
-IDE-EXI (ATA-over-EXI) adapters are supported in both memory card slots and in
+### IDE-EXI/USB Dolphin
+IDE-EXI/USB Dolphin (ATA-over-EXI) adapters are supported in both memory card slots A,B and in
 SP1, with the same EXI mapping Swiss uses.
 
 > [!NOTE]
-> The IDE-EXI and GC Loader read paths have been validated on hardware, but not
+> The IDE-EXI/USB Dolphin and GC Loader read paths have been validated on hardware, but not
 > in every adapter/drive combination.
 
 ### Block cache
@@ -106,12 +106,13 @@ advice above — FAT32 is slow for reasons the cache cannot fix.
 2. Extract the contents to the root of the SD card
 3. Pressing Z + A + START whilst in a game brings you back to the cubiboot menu
 
-## Other ODEs (e.g. FlippyDrive/GC Loader/CubeODE)
+## Other ODEs (e.g. GC Loader/CubeODE)
 Download the [```cubiboot.iso```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot.iso) and use it as appropriate for your ODE.\
-On a FlippyDrive, cubiboot uses the drive natively — your programs and
-`config.ini` go on its SD card, and its internal flash is used for
-`swiss-gc.dol` and friends. It takes priority over everything else.\
-On a GC Loader, your programs and `config.ini` can go on the GC Loader's own SD
+On a FlippyDrive, cubiboot uses the drive natively — use the ipl.dol 
+renamed to cubeboot.dol and replace the one on its internal FlippyDrive Flash,
+`config.ini` goes on its SD card, and its internal flash should contain
+`swiss-gc.dol`, `cubeboot.dol`. On a GC Loader, your programs 
+and `config.ini` can go on the GC Loader's own SD
 card — a separate SD2SP2, SD Gecko or similar adapter is no longer required, but
 still works and takes priority if one is attached.\
 ODEs besides FlippyDrive, CubeODE and GC Loader are not supported, and issues
