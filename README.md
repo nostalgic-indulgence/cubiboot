@@ -1,6 +1,6 @@
 # cubiboot
 
-This is a fork of [cubeboot](https://github.com/OffBroadway/cubeboot) by [TeamOffBroadway](https://github.com/OffBroadway) with support for SD2SP2, SD Gecko or similar SD adapters, the **GC Loader's own SD card**, and **IDE-EXI** hard drives / adapters.
+This is a fork of [cubeboot](https://github.com/OffBroadway/cubeboot) by [TeamOffBroadway](https://github.com/OffBroadway) with support for SD2SP2, SD Gecko or similar SD adapters, the **GC Loader's own SD card**, and **IDE-EXI** hard drives / adapters — on top of the **FlippyDrive** that upstream cubeboot was written for, which still works natively.
 
 If you have questions regarding this fork you can join the [Discord server](https://discord.gg/YtA9aU3BKZ)!
 
@@ -15,13 +15,45 @@ than one attached, the one nearest the top wins.
 
 | Probe order | Device  | Where it is                            | Notes |
 |-------------|---------|----------------------------------------|-------|
-| 1 | `gcldr` | GC Loader SD card                          | **New.** Read over the disc (DI) bus, so no second SD adapter is needed. |
-| 2 | `sdc`   | SD2SP2 (serial port 2)                     | |
-| 3 | `sdb`   | SD Gecko in memory card slot B             | |
-| 4 | `sda`   | SD Gecko in memory card slot A             | |
-| 5 | `ataa`  | IDE-EXI in memory card slot A              | **New.** EXI channel 0, device 0. |
-| 6 | `atab`  | IDE-EXI in memory card slot B              | **New.** EXI channel 1, device 0. |
-| 7 | `atac`  | IDE-EXI in serial port 1 (SP1)             | **New.** EXI channel 0, device 2. |
+| 1 | `fldrv` | FlippyDrive SD card **and** its internal flash | Native. Not emulated — see below. |
+| 2 | `gcldr` | GC Loader SD card                          | **New.** Read over the disc (DI) bus, so no second SD adapter is needed. |
+| 3 | `sdc`   | SD2SP2 (serial port 2)                     | |
+| 4 | `sdb`   | SD Gecko in memory card slot B             | |
+| 5 | `sda`   | SD Gecko in memory card slot A             | |
+| 6 | `ataa`  | IDE-EXI in memory card slot A              | **New.** EXI channel 0, device 0. |
+| 7 | `atab`  | IDE-EXI in memory card slot B              | **New.** EXI channel 1, device 0. |
+| 8 | `atac`  | IDE-EXI in serial port 1 (SP1)             | **New.** EXI channel 0, device 2. |
+
+### FlippyDrive
+A FlippyDrive is checked for before anything else, and when one answers it is
+used — no other device is probed. It is the only entry in the table that is not
+a block device behind FatFs: cubeboot was originally written against the
+FlippyDrive's own file protocol on the disc (DI) bus, and everything else in the
+list exists to emulate that protocol for hardware which does not speak it. On a
+real FlippyDrive cubiboot talks to it directly again, which restores the things
+the emulation cannot do at all:
+
+- **The drive's internal flash.** `swiss-gc.dol`, `stub.bin` and
+  `apploader.img` are read from flash, exactly as on a stock FlippyDrive
+  install, falling back to the SD card when a file isn't in flash. On every
+  other device these live in a `/cubiboot` folder on the card instead.
+- **Booting games through the drive.** The drive serves the selected ISO as if
+  it were a disc, so games start without chainloading Swiss and without
+  `swiss-gc.dol` being present at all. Set `force_swiss_boot` if you would
+  rather keep the Swiss route.
+- **Booting the physical disc.** Z in the menu hands the bus to the real disc
+  and takes it back if there isn't one.
+
+Detection follows Swiss: cubiboot inquires on the DI bus, asks a drive that is
+busy emulating a disc to step aside so it can inquire again (which is the normal
+state of affairs when cubiboot itself was launched as a disc image), and boots
+the firmware if the drive is sitting in its bootloader.
+
+> [!NOTE]
+> The FlippyDrive path is restored upstream code driven by a new detect-and-
+> dispatch layer. It has not been re-validated on FlippyDrive hardware by this
+> fork. If a drive is not detected, everything falls through to the devices
+> below it in the table.
 
 ### GC Loader SD card
 Booting `cubiboot.iso` from a GC Loader now reads your programs straight off the
@@ -41,7 +73,8 @@ An LRU block cache sits between FatFs and the storage drivers, so repeated reads
 of the same areas — directory entries and FAT chains, which get walked over and
 over while the game list is built — are served from RAM instead of the device. It
 is ported from [libdvm](https://github.com/extremscorner/libdvm) and applies to
-every device in the table above.
+every FatFs device in the table above. A FlippyDrive bypasses it entirely — its
+own firmware does the caching, on the far side of the DI bus.
 
 It is sized differently on each side of the boot:
 
@@ -73,13 +106,16 @@ advice above — FAT32 is slow for reasons the cache cannot fix.
 2. Extract the contents to the root of the SD card
 3. Pressing Z + A + START whilst in a game brings you back to the cubiboot menu
 
-## Other ODEs (e.g. GC Loader/CubeODE)
+## Other ODEs (e.g. FlippyDrive/GC Loader/CubeODE)
 Download the [```cubiboot.iso```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot.iso) and use it as appropriate for your ODE.\
+On a FlippyDrive, cubiboot uses the drive natively — your programs and
+`config.ini` go on its SD card, and its internal flash is used for
+`swiss-gc.dol` and friends. It takes priority over everything else.\
 On a GC Loader, your programs and `config.ini` can go on the GC Loader's own SD
 card — a separate SD2SP2, SD Gecko or similar adapter is no longer required, but
 still works and takes priority if one is attached.\
-ODEs besides CubeODE and GC Loader are not supported, and issues specific to
-these devices might not be fixed.
+ODEs besides FlippyDrive, CubeODE and GC Loader are not supported, and issues
+specific to these devices might not be fixed.
 
 ## Release files — which one do I need?
 Every build produces the files below. You only need the ones matching how

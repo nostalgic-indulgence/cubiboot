@@ -27,13 +27,27 @@ void emu_update_boot() {
     dvd_custom_open_flash("/swiss-gc.dol", FILE_ENTRY_TYPE_FILE, 0);
     file_status_t* status = dvd_custom_status();
     found_swiss = (status != NULL && status->result == 0);
-    dvd_custom_close(status->fd);
+    // Guard the close: dvd_custom_status() can now genuinely return NULL, which
+    // it never did while every device went through the FatFs emulation.
+    if (status != NULL)
+        dvd_custom_close(status->fd);
 }
 
 bool emu_can_boot(gm_file_type_t type) {
     switch (type) {
-        case GM_FILE_TYPE_GAME:
+        case GM_FILE_TYPE_GAME: {
+            // A real FlippyDrive serves the ISO as a disc and boots it itself
+            // (chainload_boot_game), so Swiss is only in the picture when the
+            // user has forced that route with force_swiss_boot.
+            extern u32 force_swiss_boot;
+            if (emu_is_native() && !force_swiss_boot)
+                return true;
+
+            return found_swiss;
+        }
         case GM_FILE_TYPE_PROGRAM:
+            // DOLs always go through Swiss -- see bs2start(), which notes that
+            // loading one directly is only partially working.
             return found_swiss;
         default:
             return true;
@@ -55,6 +69,25 @@ void emu_draw_boot_error(gm_file_type_t type, u8 ui_alpha) {
 }
 
 bool emu_has_dvd() {
+    if (emu_is_native()) {
+        // A FlippyDrive is not showing us the physical disc right now -- it is
+        // busy being our filesystem. Hand the bus over, look, and hand it back
+        // either way: the menu we return to still needs to read from the drive,
+        // and bs2start() enters bypass again for real if the user boots the
+        // disc. Skipping the restore leaves the menu with no storage at all.
+        dvd_custom_bypass_enter();
+        udelay(10 * 1000);
+
+        bool found = (dvd_read_id() == 0 && dvd_get_error() == 0);
+        if (!found)
+            dvd_stop_motor();
+
+        dvd_custom_bypass_exit();
+        udelay(10 * 1000);
+
+        return found;
+    }
+
     dvd_reset();
     udelay(10 * 1000);
 

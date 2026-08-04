@@ -534,7 +534,7 @@ gm_list_info gm_list_files(const char *target_dir) {
     }
 
     file_status_t *status = dvd_custom_status();
-    if (status->result != 0) {
+    if (status == NULL || status->result != 0) {
         OSReport("ERROR: could not stat dir %s\n", target_dir);
         return (gm_list_info){0, false};
     }

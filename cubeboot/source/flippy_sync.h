@@ -1,3 +1,5 @@
+#pragma once
+
 #include <gctypes.h>
 #include <ogc/cache.h>
 #include "ipc.h"

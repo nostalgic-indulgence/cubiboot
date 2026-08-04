@@ -17,6 +17,8 @@
 #include "dolphin_dvd.h"
 #include "gc_dvd.h"
 
+#include "emu/tweaks.h"
+
 #define SYS_VIDEO_NTSC   0
 #define SYS_VIDEO_PAL    1
 #define SYS_VIDEO_MPAL   2
@@ -198,7 +200,14 @@ extern const void _patches_end;
 
 void chainload_boot_game(gm_file_entry_t *boot_entry, bool passthrough) {
     extern u32 force_swiss_boot;
-    if (!passthrough || force_swiss_boot)
+
+    // Booting a game from storage needs the drive to serve it as if it were a
+    // disc: open the ISO, make it the default fd, and let the code below read
+    // it through fd 0 exactly like the console reads a real disc. Only a real
+    // FlippyDrive can do that (dvd_set_default_fd), so on every other device we
+    // hand the job to Swiss instead. Passthrough (a physical disc) never needs
+    // it -- the disc is already on the bus.
+    if (force_swiss_boot || (!passthrough && !emu_is_native()))
         chainload_swiss_game(boot_entry == NULL ? NULL : boot_entry->path, passthrough);
 
     u32 patchSize = 0x200; // setup patching space

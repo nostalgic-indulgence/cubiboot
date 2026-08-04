@@ -97,7 +97,15 @@ dolphin_game_into_t get_game_info(char *game_path, int *out_fd) {
 
     // OSReport("DEBUG: file opened %s\n", game_path);
 
+    // NULL is a real outcome on a FlippyDrive: the status query is a DI
+    // transfer of its own and can fail outright, where the FatFs emulation
+    // could only ever report a bad result code.
     file_status_t *status = dvd_custom_status();
+    if (status == NULL) {
+        OSReport("ERROR: Failed to get status for %s\n", game_path);
+        return (dolphin_game_into_t) { .valid = false };
+    }
+
     if (status->result != 0) {
         OSReport("ERROR: Failed to get status for %s\n", game_path);
 

@@ -13,6 +13,12 @@ extern "C" {
 
 const char* emu_get_device();
 
+// True when the adopted device is a real FlippyDrive, i.e. the dvd_custom_*
+// calls are going to the drive's own file API rather than being emulated over
+// FatFs. Callers use it to decide whether the native-only capabilities (the
+// drive's flash, dvd_set_default_fd disc emulation) are available.
+bool emu_is_native();
+
 #ifdef IPL_CODE
 void emu_update_boot();
 bool emu_can_boot(gm_file_type_t type);

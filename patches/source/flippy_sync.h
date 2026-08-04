@@ -1,3 +1,5 @@
+#pragma once
+
 #include <gctypes.h>
 #include "os.h"
 #include "ipc.h"
