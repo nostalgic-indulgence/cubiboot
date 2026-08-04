@@ -88,26 +88,26 @@ and FAT chain walks are sequential. This does not change the exFAT-vs-FAT32
 advice above — FAT32 is slow for reasons the cache cannot fix.
 
 ## Installation - [PicoLoader](https://github.com/makeo/PicoLoader)
-1. Download the [```cubiboot_picoloader.uf2```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot_picoloader.uf2) file
+1. Download the [```cubiboot_picoloader.uf2```] file
 2. Hold down the button on the RP Pico whilst plugging it into your PC
 3. Copy the .uf2 file to the USB drive
 4. Download the [latest Swiss](https://github.com/emukidid/swiss-gc/releases/latest) dol
 5. Rename the Swiss dol to ```swiss-gc.dol``` and place it on your SD card
 
 ## Installation - [PicoLoader](https://github.com/makeo/PicoLoader)/[PicoBoot](https://github.com/webhdx/PicoBoot) with gekkoboot payload
-1. Download the [```cubiboot.dol```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot.dol)
+1. Download the [```cubiboot.dol```]
 2. Rename it to ```ipl.dol```
 3. Copy the ```ipl.dol``` onto your SD card
 4. Download the [latest Swiss](https://github.com/emukidid/swiss-gc/releases/latest) dol
 5. Rename the Swiss dol to ```swiss-gc.dol``` and place it on your SD card
 
 ## Using In-Game Reset
-1. Download [```EXTRACT_TO_ROOT.zip```](https://github.com/makeo/cubiboot/releases/latest/download/EXTRACT_TO_ROOT.zip)
+1. Download [```EXTRACT_TO_ROOT.zip```]
 2. Extract the contents to the root of the SD card
 3. Pressing Z + A + START whilst in a game brings you back to the cubiboot menu
 
 ## Other ODEs (e.g. GC Loader/CubeODE)
-Download the [```cubiboot.iso```](https://github.com/makeo/cubiboot/releases/latest/download/cubiboot.iso) and use it as appropriate for your ODE.\
+Download the [```cubiboot.iso```] and use it as appropriate for your ODE.\
 On a FlippyDrive, cubiboot uses the drive natively — use the ipl.dol 
 renamed to cubeboot.dol and replace the one on its internal FlippyDrive Flash,
 `config.ini` goes on its SD card, and its internal flash should contain
